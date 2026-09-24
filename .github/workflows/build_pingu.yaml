@@ -20,32 +20,52 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  IMAGE_NAME: starpilot-larch64-builder:latest
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     steps:
-      - name: Free disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/local/share/boost || true
-          sudo docker image prune -af || true
-          df -h /
-
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
+      # Builder image layers live in the GitHub Actions cache
+      - uses: docker/setup-buildx-action@v3
       - name: Build container image
-        run: scripts/laptop_device_build.sh build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tools/laptop_device_build/Dockerfile
+          platforms: linux/arm64
+          tags: ${{ env.IMAGE_NAME }}
+          load: true
+          cache-from: type=gha,scope=pingu-builder
+          cache-to: type=gha,mode=max,scope=pingu-builder
+
+      # The sysroot only changes when the AGNOS version does
+      - name: Restore AGNOS sysroot
+        id: sysroot
+        uses: actions/cache@v4
+        with:
+          path: .comma_sysroot
+          key: agnos-sysroot-${{ hashFiles('system/hardware/tici/agnos.json', 'tools/laptop_device_build/extract_sysroot_from_agnos.py') }}
 
       - name: Extract AGNOS sysroot
-        run: scripts/laptop_device_build.sh setup-sysroot-agnos
-
-      - name: Drop AGNOS image download
+        if: steps.sysroot.outputs.cache-hit != 'true'
         run: |
+          scripts/laptop_device_build.sh setup-sysroot-agnos
           rm -rf .cache/agnos
-          df -h /
+
+      - name: Restore Python venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv-linux-arm64
+            .cache/uv
+          key: uv-venv-${{ hashFiles('uv.lock') }}
 
       - name: Build
         run: |
