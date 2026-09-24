@@ -24,6 +24,8 @@ from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, 
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.subaru.values import CAR as SUBARU, SUBARU_REDNECK_CRUISE_CARS, SubaruSafetyFlags
 from opendbc.car.toyota.values import CAR as TOYOTA, NO_DSU_CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaStarPilotFlags, ToyotaSafetyFlags
+from opendbc.car.volkswagen.hca_tuning import encode_pq_safety_param
+from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN, VolkswagenFlags
 from opendbc.car.values import PLATFORMS
 from opendbc.can import CANParser
 from openpilot.common.params import Params
@@ -313,6 +315,13 @@ class CarInterfaceBase(ABC):
           CP.openpilotLongitudinalControl = True
           CP.safetyConfigs[-1].safetyParam |= SubaruSafetyFlags.REDNECK_CRUISE.value
           fp_ret.safetyConfigs[-1].safetyParam |= SubaruSafetyFlags.REDNECK_CRUISE.value
+
+      elif platform in VOLKSWAGEN:
+        # StarPinguPilot: latch the selected HCA rates into the panda safety param
+        if CP.flags & VolkswagenFlags.PQ:
+          rate_bits = encode_pq_safety_param(params.get_int("VolkswagenHCADeltaRateUp"), params.get_int("VolkswagenHCADeltaRateDown"))
+          CP.safetyConfigs[-1].safetyParam |= rate_bits
+          fp_ret.safetyConfigs[-1].safetyParam |= rate_bits
 
     return fp_ret
 

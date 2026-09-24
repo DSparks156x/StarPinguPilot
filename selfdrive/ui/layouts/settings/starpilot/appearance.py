@@ -321,6 +321,10 @@ class StarPilotAppearanceLayout(_SettingsPage):
                        get_state=lambda: self._params.get_bool("ShowCSCStatus"),
                        set_state=lambda s: self._params.put_bool("ShowCSCStatus", s),
                        visible=hud_on),
+            SettingRow("ShowTamagotchi", "toggle", tr_noop("Pingu Tamagotchi"),
+                       subtitle=tr_noop("A little Pingu on the driving screen."),
+                       get_state=lambda: self._params.get_bool("ShowTamagotchi"),
+                       set_state=lambda s: self._params.put_bool("ShowTamagotchi", s)),
         ]
 
         # ═══ 3. Screen Declutter & Visibility ═══

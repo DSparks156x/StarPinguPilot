@@ -23,6 +23,7 @@ from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.subaru.values import SUBARU_REDNECK_CRUISE_CARS, SUBARU_STOP_START_CARS, SubaruFlags
 from opendbc.car.tesla.values import CAR as TESLA_CAR
 from opendbc.car.toyota.values import CAR as TOYOTA_CAR, ToyotaStarPilotFlags
+from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
@@ -1637,6 +1638,12 @@ class StarPilotVariables:
     toggle.volt_one_pedal_mode = self.get_value("VoltOnePedalMode", condition=toggle.car_model in LEGACY_VOLT_STOCK_ACC_CARS)
 
     toggle.volt_sng = self.get_value("VoltSNG", condition=toggle.car_model in LEGACY_VOLT_STOCK_ACC_CARS)
+
+    # StarPinguPilot
+    volkswagen_pq = toggle.car_make == "volkswagen" and bool(CP.flags & VolkswagenFlags.PQ)
+    toggle.volkswagen_hca_mode = self.get_value("VolkswagenHCAMode", cast=int, condition=volkswagen_pq)
+    toggle.volkswagen_hca_delta_rate_up = self.get_value("VolkswagenHCADeltaRateUp", cast=int, condition=volkswagen_pq)
+    toggle.volkswagen_hca_delta_rate_down = self.get_value("VolkswagenHCADeltaRateDown", cast=int, condition=volkswagen_pq)
 
     process_starpilot_toggles.cache_clear()
     if clear_update_flag:

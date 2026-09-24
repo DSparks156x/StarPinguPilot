@@ -1085,7 +1085,7 @@ class SafetyTest(SafetyTestBase):
               tx = list(filter(lambda m: not (m[1] == 0 and m[0] in [0x124, 0x321, 0x322, 0x323]), tx))
             if attr.startswith('TestSubaruPreglobal') and current_test.startswith('TestSubaruPreglobal'):
               continue
-            if {attr, current_test}.issubset({'TestVolkswagenPqSafety', 'TestVolkswagenPqStockSafety', 'TestVolkswagenPqLongSafety'}):
+            if attr.startswith('TestVolkswagenPq') and current_test.startswith('TestVolkswagenPq'):  # StarPinguPilot: PQ variants
               continue
             if {attr, current_test}.issubset({'TestGmCameraSafety', 'TestGmCameraLongitudinalSafety', 'TestGmAscmSafety',
                                               'TestGmCameraEVSafety', 'TestGmCameraLongitudinalEVSafety', 'TestGmAscmEVSafety',

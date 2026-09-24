@@ -36,6 +36,7 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.wrap_text import wrap_text
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
+from openpilot.system.ui.widgets.tamagotchi import TamagotchiWidget
 from openpilot.common.filter_simple import BounceFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -596,6 +597,7 @@ class AugmentedRoadView(CameraView):
     self._min_steer_speed_banner = MinSteerSpeedBanner()
     self._standstill_timer = StandstillTimerOverlay()
     self._favorite_slots = self._child(FavoriteSlotsOverlay())
+    self._tamagotchi = TamagotchiWidget(scale=0.5)  # StarPinguPilot
     self._offroad_label = UnifiedLabel("start the car to\nuse openpilot", 54, FontWeight.DISPLAY,
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
@@ -802,6 +804,10 @@ class AugmentedRoadView(CameraView):
       else:
         self._sidebar_widgets.render(self.rect)
       gui_app.mark_progress("mici.onroad.after_sidebar")
+      if ui_state.show_tamagotchi:  # StarPinguPilot
+        self._tamagotchi.set_position(self._content_rect.x + self._content_rect.width - self._tamagotchi.rect.width - 4,
+                                      self._content_rect.y + self._content_rect.height - self._tamagotchi.rect.height)
+        self._tamagotchi.render()
     if draw_hud_controls and (camera_view_none or is_driver_stream or not in_reverse):
       self._favorite_slots.render(self._content_rect)
     # Inset by the border so the pill never covers the green/orange status border.

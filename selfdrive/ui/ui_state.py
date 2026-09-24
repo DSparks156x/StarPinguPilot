@@ -98,6 +98,7 @@ class UIState:
     self.usbgpu_compiled: bool = self.params.get_bool("UsbGpuCompiled")
     self.usbgpu_active: bool = self.params.get_bool("UsbGpuActive")
     self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
+    self.show_tamagotchi: bool = False
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -222,6 +223,7 @@ class UIState:
     self.usbgpu_compiled = params.get_bool("UsbGpuCompiled")
     self.usbgpu_active = params.get_bool("UsbGpuActive")
     self.usbgpu_loading = params.get_bool("UsbGpuLoading")
+    self.show_tamagotchi = params.get_bool("ShowTamagotchi")  # StarPinguPilot
     self.switchback_mode_enabled = self.params_memory.get_bool("SwitchbackModeEnabled") if self.started else False
     self.conditional_status = self.params_memory.get_int("CEStatus", default=0) if self.started else 0
     mark_progress("ui.update.after_state_params")

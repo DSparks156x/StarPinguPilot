@@ -1,4 +1,7 @@
+from opendbc.car.volkswagen.hca_tuning import HCA_SETTINGS as VOLKSWAGEN_HCA_SELECTORS
+from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN_CAR, VolkswagenFlags
 from openpilot.common.params import Params
+from openpilot.starpilot.common.starpilot_variables import update_starpilot_toggles
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton, BigParamControl
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog, BigMultiOptionDialog
@@ -185,6 +188,48 @@ class FingerprintLayoutMici(NavScroller):
 
     self._show_option_dialog("select model", option_labels, default_model, on_selected)
 
+VOLKSWAGEN_PQ_CARS = {str(platform) for platform in VOLKSWAGEN_CAR if platform.config.flags & VolkswagenFlags.PQ}
+
+
+def _is_volkswagen_pq() -> bool:
+  CP = ui_state.CP
+  if CP is not None and CP.brand:
+    return CP.brand == "volkswagen" and bool(CP.flags & VolkswagenFlags.PQ)
+  return (ui_state.params.get("CarModel", encoding="utf-8") or "") in VOLKSWAGEN_PQ_CARS
+
+
+class HCATuningButton(BigButton):
+  """StarPinguPilot: Volkswagen PQ HCA mode/rate selector, param value = option index"""
+  def __init__(self, key: str, title: str, labels: tuple[str, ...]):
+    self._key = key
+    self._labels = labels
+    super().__init__(title.lower(), self._current_label())
+    self.set_click_callback(self._open_selector)
+    self.set_visible(_is_volkswagen_pq)
+
+  def _current_label(self) -> str:
+    idx = ui_state.params.get_int(self._key, return_default=True)
+    return self._labels[idx] if 0 <= idx < len(self._labels) else self._labels[0]
+
+  def _open_selector(self):
+    dialog_holder: dict[str, BigMultiOptionDialog] = {}
+
+    def on_confirm():
+      selected = dialog_holder["dialog"].get_selected_option()
+      if selected in self._labels:
+        ui_state.params.put_int(self._key, self._labels.index(selected))
+        update_starpilot_toggles()
+        self.set_value(selected)
+
+    dialog = BigMultiOptionDialog(options=list(self._labels), default=self._current_label(), right_btn_callback=on_confirm)
+    dialog_holder["dialog"] = dialog
+    gui_app.push_widget(dialog)
+
+  def show_event(self):
+    super().show_event()
+    self.set_value(self._current_label())
+
+
 class VehicleLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
@@ -195,7 +240,7 @@ class VehicleLayoutMici(NavScroller):
     fingerprint_btn = BigButton("fingerprint", "",gui_app.texture("icons_mici/settings/vehicle/fingerprint.png", 58, 64))
     fingerprint_btn.set_click_callback(lambda: gui_app.push_widget(fingerprint_panel))
 
-    vehicle_specific_widgets = tuple()
+    vehicle_specific_widgets = tuple(HCATuningButton(key, title, labels) for key, (title, labels) in VOLKSWAGEN_HCA_SELECTORS.items())
 
     self._scroller.add_widgets([
       fingerprint_btn,

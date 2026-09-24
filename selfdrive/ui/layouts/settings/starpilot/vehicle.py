@@ -40,6 +40,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   snap_rect,
   with_alpha,
 )
+from opendbc.car.volkswagen import hca_tuning
 from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
 from openpilot.selfdrive.ui.lib.fingerprint_catalog import (
   FingerprintModelOption,
@@ -76,6 +77,10 @@ def _lock_doors_timer_labels():
   for i in range(5, 305, 5):
     labels[float(i)] = f"{i}s"
   return labels
+
+
+# StarPinguPilot: Volkswagen PQ HCA tuning, param value = option index
+VOLKSWAGEN_HCA_SELECTORS = hca_tuning.HCA_SETTINGS
 
 
 SECTION_GAP = AETHER_LIST_METRICS.section_gap
@@ -180,6 +185,12 @@ class VehicleSettingsManagerView(PanelManagerView):
         get_value=lambda k=star_keys: self._combo_value(k),
         on_click=lambda: self._controller._on_select("combo:star"),
       ))
+
+    if cs.isVolkswagenPQ:
+      for key, (title, _) in VOLKSWAGEN_HCA_SELECTORS.items():
+        rows.append(SettingRow(key, "value", title,
+                     get_value=lambda k=key: self._controller._get_hca_label(k),
+                     on_click=lambda k=key: self._controller._on_select(k)))
 
     return rows
 
@@ -717,6 +728,8 @@ class StarPilotVehicleSettingsLayout(_SettingsPage):
       self._on_select_model()
     elif key == "LockDoorsTimer":
       self._show_lock_timer_selector()
+    elif key in VOLKSWAGEN_HCA_SELECTORS:
+      self._show_hca_selector(key)
     else:
       self._show_action_picker(key)
 
@@ -837,6 +850,22 @@ class StarPilotVehicleSettingsLayout(_SettingsPage):
     gui_app.push_widget(AetherSliderDialog(tr("Lock Doors Timer"), 0, 300, 5,
                                             self._params.get_int("LockDoorsTimer"), on_close,
                                             labels=_lock_doors_timer_labels(), color=PANEL_STYLE.accent))
+
+  def _get_hca_label(self, key: str) -> str:
+    labels = VOLKSWAGEN_HCA_SELECTORS[key][1]
+    idx = self._params.get_int(key, return_default=True)
+    return labels[idx] if 0 <= idx < len(labels) else labels[0]
+
+  def _show_hca_selector(self, key: str):
+    title, labels = VOLKSWAGEN_HCA_SELECTORS[key]
+
+    def on_select(res):
+      if res == DialogResult.CONFIRM and dialog.selection in labels:
+        self._params.put_int(key, labels.index(dialog.selection))
+        starpilot_state.update(force=True)
+
+    dialog = MultiOptionDialog(tr(title), list(labels), self._get_hca_label(key), callback=on_select)
+    gui_app.push_widget(dialog)
 
   def _get_display_make(self) -> str:
     make = self._params.get("CarMake") or ""

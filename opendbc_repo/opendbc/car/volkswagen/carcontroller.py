@@ -4,7 +4,7 @@ from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarControllerBase
-from opendbc.car.volkswagen import mebcan, mlbcan, mqbcan, pqcan
+from opendbc.car.volkswagen import hca_tuning, mebcan, mlbcan, mqbcan, pqcan
 from opendbc.car.volkswagen.values import CanBus, CarControllerParams, VolkswagenFlags
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -22,8 +22,13 @@ class CarController(CarControllerBase):
     if CP.flags & VolkswagenFlags.MEB:
       self.meb_long_state = mebcan.MebLongStateMachine(self.CP, self.CCP)
 
+    self.hca_status = 5
     if CP.flags & VolkswagenFlags.PQ:
       self.CCS = pqcan
+      # StarPinguPilot: never exceed the HCA rates the panda latched at startup
+      self.pq_max_delta_rates = hca_tuning.decode_pq_safety_param(CP.safetyConfigs[-1].safetyParam,
+                                                                  self.CCP.STEER_DELTA_UP, self.CCP.STEER_DELTA_DOWN)
+      self.CCP.STEER_DELTA_UP, self.CCP.STEER_DELTA_DOWN = self.pq_max_delta_rates
     elif CP.flags & VolkswagenFlags.MLB:
       self.CCS = mlbcan
     else:
@@ -44,6 +49,9 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     hud_control = CC.hudControl
     can_sends = []
+
+    if self.CP.flags & VolkswagenFlags.PQ and not CC.latActive:
+      self.update_pq_hca_tuning(starpilot_toggles)
 
     # **** Steering Controls ************************************************ #
 
@@ -107,7 +115,10 @@ class CarController(CarControllerBase):
 
         self.eps_timer_soft_disable_alert = self.hca_frame_timer_running > self.CCP.STEER_TIME_ALERT / DT_CTRL
         self.apply_torque_last = apply_torque
-        can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled))
+        if self.CP.flags & VolkswagenFlags.PQ:
+          can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled, self.hca_status))
+        else:
+          can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled))
 
       if self.CP.flags & VolkswagenFlags.STOCK_HCA_PRESENT:
         # Pacify VW Emergency Assist driver inactivity detection by changing its view of driver steering input torque
@@ -181,7 +192,8 @@ class CarController(CarControllerBase):
 
     # **** Stock ACC Button Controls **************************************** #
 
-    gra_send_ready = self.CP.pcmCruise and CS.gra_stock_values["COUNTER"] != self.gra_acc_counter_last
+    gra_send_ready = self.CP.pcmCruise and CS.gra_stock_values["COUNTER"] != self.gra_acc_counter_last and \
+                     not self.CP.flags & VolkswagenFlags.PQ_CC_ONLY
     if gra_send_ready and (CC.cruiseControl.cancel or CC.cruiseControl.resume):
       can_sends.append(self.CCS.create_acc_buttons_control(self.packer_pt, self.CAN.ext, CS.gra_stock_values,
                                                            cancel=CC.cruiseControl.cancel, resume=CC.cruiseControl.resume))
@@ -197,3 +209,11 @@ class CarController(CarControllerBase):
     self.gra_acc_counter_last = CS.gra_stock_values["COUNTER"]
     self.frame += 1
     return new_actuators, can_sends
+
+  def update_pq_hca_tuning(self, starpilot_toggles):
+    # StarPinguPilot: pick up HCA mode/rate changes while not steering
+    self.hca_status = hca_tuning.hca_status(getattr(starpilot_toggles, "volkswagen_hca_mode", hca_tuning.DEFAULT_HCA_MODE))
+    up, down = hca_tuning.delta_rates(getattr(starpilot_toggles, "volkswagen_hca_delta_rate_up", 0),
+                                      getattr(starpilot_toggles, "volkswagen_hca_delta_rate_down", 0))
+    self.CCP.STEER_DELTA_UP = min(up, self.pq_max_delta_rates[0])
+    self.CCP.STEER_DELTA_DOWN = min(down, self.pq_max_delta_rates[1])

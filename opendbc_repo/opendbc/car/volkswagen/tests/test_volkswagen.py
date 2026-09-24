@@ -142,7 +142,8 @@ class TestVolkswagenPlatformConfigs:
             assert both_meb and disjoint_years, f"Shared chassis codes: {comp}"
 
   def test_custom_fuzzy_fingerprinting(self, subtests):
-    all_radar_fw = list({fw for ecus in FW_VERSIONS.values() for fw in ecus[Ecu.fwdRadar, 0x757, None]})
+    # StarPinguPilot: cars without ACC (e.g. Audi TT Mk2) have no radar FW
+    all_radar_fw = list({fw for ecus in FW_VERSIONS.values() for fw in ecus.get((Ecu.fwdRadar, 0x757, None), [])})
 
     for platform in CAR:
       with subtests.test(platform=platform.name):
@@ -159,7 +160,7 @@ class TestVolkswagenPlatformConfigs:
               # Check a few FW cases - expected, unexpected
               for radar_fw in random.sample(all_radar_fw, 5) + [b'\xf1\x875Q0907572G \xf1\x890571', b'\xf1\x877H9907572AA\xf1\x890396']:
                 should_match = ((wmi in platform.config.wmis and chassis_code in platform.config.chassis_codes) and
-                                radar_fw in all_radar_fw)
+                                radar_fw in all_radar_fw and (Ecu.fwdRadar, 0x757, None) in FW_VERSIONS.get(platform, {}))
 
                 live_fws = {(0x757, None): [radar_fw]}
                 matches = FW_QUERY_CONFIG.match_fw_to_car_fuzzy(live_fws, vin, FW_VERSIONS)

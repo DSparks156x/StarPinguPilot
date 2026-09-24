@@ -115,6 +115,9 @@ non_tested_cars = [
   VOLVO.VOLVO_S60_RECHARGE,
   VOLVO.POLESTAR_2,
 
+  # StarPinguPilot: no public routes yet
+  VOLKSWAGEN.AUDI_TT_MK2,
+
 ]
 
 non_tested_cars.extend(CC_ONLY_CAR)

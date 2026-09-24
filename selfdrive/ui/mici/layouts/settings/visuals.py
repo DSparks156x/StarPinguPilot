@@ -104,6 +104,7 @@ class VisualsLayoutMici(NavScroller):
     self._slc_confirmation_btn = BigParamControl("confirm new speed limits", "SLCConfirmation")
     self._slc_confirmation_lower_btn = BigParamControl("confirm lower limits", "SLCConfirmationLower")
     self._slc_confirmation_higher_btn = BigParamControl("confirm higher limits", "SLCConfirmationHigher")
+    self._tamagotchi_btn = BigParamControl("pingu tamagotchi", "ShowTamagotchi")  # StarPinguPilot
 
     self._scroller.add_widgets([
       self._camera_view_btn,
@@ -118,6 +119,7 @@ class VisualsLayoutMici(NavScroller):
       self._slc_confirmation_btn,
       self._slc_confirmation_lower_btn,
       self._slc_confirmation_higher_btn,
+      self._tamagotchi_btn,
     ])
 
   def show_event(self):

@@ -220,6 +220,10 @@ SAFE_MODE_MANAGED_KEYS = (
   "GMPedalLongitudinal",
   "GMDashSpoofOffsets",
   "LongPitch",
+  # StarPinguPilot
+  "VolkswagenHCADeltaRateDown",
+  "VolkswagenHCADeltaRateUp",
+  "VolkswagenHCAMode",
 )
 
 SAFE_MODE_PRESERVED_KEYS = (

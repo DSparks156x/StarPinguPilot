@@ -581,6 +581,14 @@ FW_VERSIONS = {
       b'\xf1\x875Q0907572S \xf1\x890780',
     ],
   },
+  CAR.AUDI_TT_MK2: {
+    (Ecu.engine, 0x7e0, None): [
+      b'\xf1\x878J0907115AE\xf1\x890020',
+    ],
+    (Ecu.srs, 0x715, None): [
+      b'\xf1\x878J0959655  \xf1\x890020',
+    ],
+  },
   CAR.VOLKSWAGEN_PASSAT_NMS: {
     (Ecu.engine, 0x7e0, None): [
       b'\xf1\x8706K906016C \xf1\x899609',

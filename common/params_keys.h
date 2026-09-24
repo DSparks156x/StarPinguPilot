@@ -807,4 +807,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"WheelIcon", {PERSISTENT, STRING, "stock", "stock", 0}},
     {"WheelSpeed", {PERSISTENT, BOOL, "0", "0", 2, SETTINGS_SIMPLE}},
     {"WheelToDownload", {CLEAR_ON_MANAGER_START, STRING, "", ""}},
+
+    // StarPinguPilot variables
+    {"ShowTamagotchi", {PERSISTENT, BOOL, "0", "0", 0, SETTINGS_SIMPLE}},
+    {"VolkswagenHCADeltaRateDown", {PERSISTENT, INT, "0", "0", 2}},
+    {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0", "0", 2}},
+    {"VolkswagenHCAMode", {PERSISTENT, INT, "1", "0", 2}},
 };

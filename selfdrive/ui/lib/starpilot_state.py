@@ -9,7 +9,10 @@ from cereal import car, log, custom, messaging
 from opendbc.car.gm.values import GMFlags
 from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.toyota.values import TSS2_CAR
+from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN_CAR, VolkswagenFlags
 from openpilot.starpilot.common.lateral_delay import full_lateral_delay
+
+VOLKSWAGEN_PQ_CARS = {str(platform) for platform in VOLKSWAGEN_CAR if platform.config.flags & VolkswagenFlags.PQ}
 
 @dataclass
 class StarPilotCarState:
@@ -26,7 +29,8 @@ class StarPilotCarState:
     isTorqueCar: bool = False
     isTSK: bool = False
     isHKGCanFd: bool = False
-    
+    isVolkswagenPQ: bool = False
+
     # ========== Car Capabilities ==========
     hasBSM: bool = False
     hasRadar: bool = True
@@ -96,6 +100,7 @@ class StarPilotState:
             self.car_state.isJeep = brand == "chrysler" and fallback_model_str.startswith("JEEP_")
             self.car_state.isSubaru = brand == "subaru"
             self.car_state.isToyota = brand == "toyota"
+            self.car_state.isVolkswagenPQ = brand == "volkswagen" and fallback_model_str in VOLKSWAGEN_PQ_CARS
             self.car_state.isHKGCanFd = False
             self.car_state.hasModeStarButtons = False
             self.car_state.isBolt = False
@@ -171,6 +176,7 @@ class StarPilotState:
             self.car_state.isJeep = car_make == "chrysler" and car_fingerprint.startswith("JEEP_")
             self.car_state.isSubaru = car_make == "subaru"
             self.car_state.isToyota = car_make == "toyota"
+            self.car_state.isVolkswagenPQ = car_make == "volkswagen" and bool(self._safe_get(CP, "flags", 0) & VolkswagenFlags.PQ.value)
             self.car_state.isTSK = bool(self._safe_get(CP, "secOcRequired", False))
             self.car_state.isVolt = car_fingerprint.startswith("CHEVROLET_VOLT")
             
