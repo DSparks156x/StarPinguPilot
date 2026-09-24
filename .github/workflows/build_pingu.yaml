@@ -1,0 +1,70 @@
+# StarPinguPilot: build device binaries on GitHub's free ARM runners and push a prebuilt "build" commit.
+# StarPilot's own compile_starpilot.yaml needs the maintainer's self-hosted runner; this uses the same
+# scripts/laptop_device_build.sh flow with a sysroot extracted from the AGNOS system image.
+name: Build StarPinguPilot
+
+on:
+  push:
+    branches: [pingu]
+  workflow_dispatch:
+    inputs:
+      full_build:
+        description: "Full build (default only rebuilds params + panda firmware)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-pingu-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/local/share/boost || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Build container image
+        run: scripts/laptop_device_build.sh build-image
+
+      - name: Extract AGNOS sysroot
+        run: scripts/laptop_device_build.sh setup-sysroot-agnos
+
+      - name: Drop AGNOS image download
+        run: |
+          rm -rf .cache/agnos
+          df -h /
+
+      - name: Build
+        run: |
+          if [[ "${{ inputs.full_build }}" == "true" ]]; then
+            ./build "$(nproc)"
+          else
+            ./build --params --panda
+          fi
+          touch prebuilt
+
+      - name: Commit and push build output
+        run: |
+          git config user.name "StarPinguPilot Build Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git add -f prebuilt
+          if git diff --cached --quiet; then
+            echo "No build output changes."
+            exit 0
+          fi
+          git commit -m "build"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
