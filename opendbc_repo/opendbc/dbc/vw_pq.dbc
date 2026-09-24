@@ -1196,7 +1196,7 @@ BO_ 978 Lenkhilfe_2: 7 XXX
  SG_ LH2_Sta_HCA : 16|4@1+ (1,0) [0|15] "" XXX
  SG_ LH2_Ausg_LW1 : 20|1@1+ (1,0) [0|1] "" XXX
  SG_ LH2_Ausg_LW1_gue : 21|1@1+ (1,0) [0|1] "" XXX
- SG_ LH2_StatEPS_PLA : 24|4@1+ (1,0) [0|15] "" XXX
+ SG_ LH2_StatEPS_PLA : 28|4@1+ (1,0) [0|15] "" XXX
  SG_ LH2_aktLenkeingriff : 32|8@1+ (1,0) [0|255] "" XXX
  SG_ LH2_PLA_Err : 48|4@1+ (1,0) [0|15] "" XXX
  SG_ LH2_PLA_Abbr : 52|4@1+ (1,0) [0|15] "" XXX

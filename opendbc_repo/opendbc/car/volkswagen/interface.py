@@ -37,7 +37,11 @@ class CarInterface(CarInterfaceBase):
       # It is documented in a four-part blog series:
       #   https://blog.willemmelching.nl/carhacking/2022/01/02/vw-part1/
       # Panda ALLOW_DEBUG firmware required.
-      ret.dashcamOnly = True
+      # StarPinguPilot: allowed outside of release, like sunnypilot. Docs keep the upstream support status.
+      ret.dashcamOnly = is_release or docs
+
+      if ret.flags & VolkswagenFlags.NO_EXT_CAN:
+        safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_NO_EXT_CAN.value
 
     elif ret.flags & VolkswagenFlags.MLB:
       # Set global MLB parameters
@@ -122,8 +126,8 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiBP = [0., 30.]
       ret.longitudinalTuning.kiV = [0.4, 0.]
 
-    ret.alphaLongitudinalAvailable = ret.networkLocation == NetworkLocation.gateway or docs
-    if alpha_long and (not ret.flags & VolkswagenFlags.MEB or ret.alphaLongitudinalAvailable):
+    ret.alphaLongitudinalAvailable = (ret.networkLocation == NetworkLocation.gateway or docs) and not ret.flags & VolkswagenFlags.PQ_CC_ONLY
+    if alpha_long and not ret.flags & VolkswagenFlags.PQ_CC_ONLY and (not ret.flags & VolkswagenFlags.MEB or ret.alphaLongitudinalAvailable):
       # Panda ALLOW_DEBUG firmware is required for Volkswagen longitudinal control.
       ret.openpilotLongitudinalControl = True
       safety_configs[0].safetyParam |= VolkswagenSafetyFlags.LONG_CONTROL.value
@@ -134,6 +138,8 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.PORSCHE_MACAN_MK1:
       ret.steerActuatorDelay = 0.07
+    elif candidate == CAR.AUDI_TT_MK2:
+      ret.steerActuatorDelay = 0.08
     elif candidate == CAR.VOLKSWAGEN_TAOS_MK1:
       # Logged Taos braking response aligns about 0.1 s later than the MQB default.
       ret.longitudinalActuatorDelay = 0.25

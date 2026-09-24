@@ -22,13 +22,16 @@ class CanBus(CanBusBase):
     super().__init__(CP, fingerprint)
 
     self._ext = self.offset
+    # StarPinguPilot: cars without an extended CAN (e.g. Audi TT Mk2) have everything on bus 1
+    self._no_ext_can = False
     if CP is not None:
       self._ext = self.offset + 2 if CP.networkLocation == NetworkLocation.gateway else self.offset
+      self._no_ext_can = bool(CP.flags & VolkswagenFlags.NO_EXT_CAN)
 
   @property
   def pt(self) -> int:
     # ADAS / Extended CAN, gateway side of the relay
-    return self.offset
+    return self.offset + 1 if self._no_ext_can else self.offset
 
   @property
   def aux(self) -> int:
@@ -39,12 +42,12 @@ class CanBus(CanBusBase):
   @property
   def cam(self) -> int:
     # ADAS / Extended CAN, camera side of the relay
-    return self.offset + 2
+    return self.offset + 1 if self._no_ext_can else self.offset + 2
 
   @property
   def ext(self) -> int:
     # ADAS / Extended CAN, side of the relay with the ACC radar
-    return self._ext
+    return self.offset + 1 if self._no_ext_can else self._ext
 
 
 class CarControllerParams:
@@ -201,6 +204,7 @@ class WMI(StrEnum):
   SKODA = "TMB"
   SEAT = "VSS"
   AUDI_EUROPE_MPV = "WA1"
+  AUDI_HUNGARY = "TRU"
   AUDI_GERMANY_CAR = "WAU"
   MAN = "WMA"
   PORSCHE_SUV = "WP1"
@@ -215,6 +219,9 @@ class WMI(StrEnum):
 class VolkswagenSafetyFlags(IntFlag):
   LONG_CONTROL = 1
   MEB_ALT_CRC = 2
+  # StarPinguPilot (PQ only)
+  PQ_NO_EXT_CAN = 4
+  # bits 3-5 / 6-8: PQ HCA rate up / down, see hca_tuning.py
 
 
 class VolkswagenFlags(IntFlag):
@@ -229,6 +236,9 @@ class VolkswagenFlags(IntFlag):
   MLB = 8
   MEB = 16
   MEB_GEN2 = 128
+  # StarPinguPilot
+  PQ_CC_ONLY = 256  # Plain cruise control, no ACC radar
+  NO_EXT_CAN = 512  # No extended CAN, everything on bus 1
 
 
 @dataclass
@@ -435,6 +445,13 @@ class CAR(Platforms):
     VolkswagenCarSpecs(mass=1551, wheelbase=2.79),
     chassis_codes={"3C", "3G"},
     wmis={WMI.VOLKSWAGEN_EUROPE_CAR},
+  )
+  AUDI_TT_MK2 = VolkswagenPQPlatformConfig(
+    [VWCarDocs("Audi TT 2008-14")],
+    VolkswagenCarSpecs(mass=1469, wheelbase=2.468, steerRatio=16.9, centerToFrontRatio=0.41),
+    chassis_codes={"8J", "FK"},
+    wmis={WMI.AUDI_HUNGARY},
+    flags=VolkswagenFlags.PQ_CC_ONLY | VolkswagenFlags.NO_EXT_CAN,
   )
   VOLKSWAGEN_PASSAT_NMS = VolkswagenPQPlatformConfig(
     [VWCarDocs("Volkswagen Passat NMS 2017-22")],

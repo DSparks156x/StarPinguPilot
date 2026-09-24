@@ -46,6 +46,35 @@ static uint32_t volkswagen_pq_compute_checksum(const CANPacket_t *msg) {
   return checksum;
 }
 
+// StarPinguPilot: cars without an extended CAN (e.g. Audi TT Mk2) have everything on bus 1
+#define FLAG_VOLKSWAGEN_PQ_NO_EXT_CAN 4U
+
+// StarPinguPilot: user-selectable HCA rate limits, encoded as (table index + 1) in 3-bit fields of the safety param.
+// A field value of 0 keeps the stock limits. Must match HCA_DELTA_RATES in opendbc/car/volkswagen/hca_tuning.py
+#define VOLKSWAGEN_PQ_RATE_UP_SHIFT 3U
+#define VOLKSWAGEN_PQ_RATE_DOWN_SHIFT 6U
+#define VOLKSWAGEN_PQ_STOCK_RATE_UP 6
+#define VOLKSWAGEN_PQ_STOCK_RATE_DOWN 10
+
+static uint8_t volkswagen_pq_bus = 0U;
+static int volkswagen_pq_max_rate_up = VOLKSWAGEN_PQ_STOCK_RATE_UP;
+static int volkswagen_pq_max_rate_down = VOLKSWAGEN_PQ_STOCK_RATE_DOWN;
+
+static int volkswagen_pq_hca_rate(uint16_t param, uint16_t shift, int stock_rate) {
+  static const int VOLKSWAGEN_PQ_HCA_DELTA_RATES[] = {10, 30, 50, 150, 300};
+  int rate = stock_rate;
+#ifdef ALLOW_DEBUG
+  int idx = (int)((param >> shift) & 0x7U);
+  if ((idx >= 1) && (idx <= 5)) {
+    rate = VOLKSWAGEN_PQ_HCA_DELTA_RATES[idx - 1];
+  }
+#else
+  SAFETY_UNUSED(param);
+  SAFETY_UNUSED(shift);
+#endif
+  return rate;
+}
+
 static safety_config volkswagen_pq_init(uint16_t param) {
   // Transmit of GRA_Neu is allowed on bus 0 and 2 to keep compatibility with gateway and camera integration
   static const CanMsg VOLKSWAGEN_PQ_STOCK_TX_MSGS[] = {{MSG_HCA_1, 0, 5, .check_relay = true}, {MSG_LDW_1, 0, 8, .check_relay = true},
@@ -53,6 +82,12 @@ static safety_config volkswagen_pq_init(uint16_t param) {
 
   static const CanMsg VOLKSWAGEN_PQ_LONG_TX_MSGS[] =  {{MSG_HCA_1, 0, 5, .check_relay = true}, {MSG_LDW_1, 0, 8, .check_relay = true},
                                                 {MSG_ACC_SYSTEM, 0, 8, .check_relay = true}, {MSG_ACC_GRA_ANZEIGE, 0, 8, .check_relay = true}};
+
+  static const CanMsg VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1[] = {{MSG_HCA_1, 1, 5, .check_relay = true}, {MSG_LDW_1, 1, 8, .check_relay = true},
+                                                     {MSG_GRA_NEU, 1, 4, .check_relay = false}};
+
+  static const CanMsg VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1[] =  {{MSG_HCA_1, 1, 5, .check_relay = true}, {MSG_LDW_1, 1, 8, .check_relay = true},
+                                                     {MSG_ACC_SYSTEM, 1, 8, .check_relay = true}, {MSG_ACC_GRA_ANZEIGE, 1, 8, .check_relay = true}};
 
   static RxCheck volkswagen_pq_rx_checks[] = {
     {.msg = {{MSG_LENKHILFE_3, 0, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
@@ -63,19 +98,39 @@ static safety_config volkswagen_pq_init(uint16_t param) {
     {.msg = {{MSG_GRA_NEU, 0, 4, 30U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
   };
 
+  static RxCheck volkswagen_pq_rx_checks_bus1[] = {
+    {.msg = {{MSG_LENKHILFE_3, 1, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_BREMSE_1, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_2, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_3, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_5, 1, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_GRA_NEU, 1, 4, 30U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+  };
+
   volkswagen_common_init();
 
 #ifdef ALLOW_DEBUG
   volkswagen_longitudinal = GET_FLAG(param, FLAG_VOLKSWAGEN_LONG_CONTROL);
 #else
-  SAFETY_UNUSED(param);
 #endif
-  return volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
-                                   BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
+
+  volkswagen_pq_bus = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_NO_EXT_CAN) ? 1U : 0U;
+  volkswagen_pq_max_rate_up = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_UP_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_UP);
+  volkswagen_pq_max_rate_down = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_DOWN_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_DOWN);
+
+  safety_config ret;
+  if (volkswagen_pq_bus == 1U) {
+    ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1) : \
+                                    BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1);
+  } else {
+    ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
+                                    BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
+  }
+  return ret;
 }
 
 static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
-  if (msg->bus == 0U) {
+  if (msg->bus == volkswagen_pq_bus) {
     // Update in-motion state from speed value.
     // Signal: Bremse_1.BR1_Rad_kmh
     if (msg->addr == MSG_BREMSE_1) {
@@ -148,9 +203,10 @@ static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
   // lateral limits
   const TorqueSteeringLimits VOLKSWAGEN_PQ_STEERING_LIMITS = {
     .max_torque = 300,               // 3.0 Nm (EPS side max of 3.0Nm with fault if violated)
-    .max_rt_delta = 113,             // 6 max rate up * 50Hz send rate * 250000 RT interval / 1000000 = 75 ; 125 * 1.5 for safety pad = 113
-    .max_rate_up = 6,                // 3.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
-    .max_rate_down = 10,             // 5.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
+    // max rate up * 50Hz send rate * 250000 RT interval / 1000000, * 1.5 for safety pad (stock: 6 -> 113)
+    .max_rt_delta = ((volkswagen_pq_max_rate_up * 75) + 3) / 4,
+    .max_rate_up = volkswagen_pq_max_rate_up,      // stock 6: 3.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
+    .max_rate_down = volkswagen_pq_max_rate_down,  // stock 10: 5.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
     .driver_torque_multiplier = 3,
     .driver_torque_allowance = 80,
     .type = TorqueDriverLimited,

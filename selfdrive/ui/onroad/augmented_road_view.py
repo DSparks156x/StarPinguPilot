@@ -14,6 +14,7 @@ from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.selfdrive.ui.lib.starpilot_status import get_screen_edge_color
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.widgets.tamagotchi import TamagotchiWidget
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
 
@@ -67,6 +68,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    self._tamagotchi = TamagotchiWidget(scale=0.75)  # StarPinguPilot
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
@@ -125,6 +127,10 @@ class AugmentedRoadView(CameraView):
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
+    if ui_state.show_tamagotchi and self._draw_road_overlays:  # StarPinguPilot
+      self._tamagotchi.set_position(self._content_rect.x + self._content_rect.width - self._tamagotchi.rect.width - 20,
+                                    self._content_rect.y + self._content_rect.height - self._tamagotchi.rect.height - 20)
+      self._tamagotchi.render()
 
     # End clipping region
     rl.end_scissor_mode()
