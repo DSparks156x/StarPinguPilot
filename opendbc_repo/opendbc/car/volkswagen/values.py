@@ -448,7 +448,8 @@ class CAR(Platforms):
   )
   AUDI_TT_MK2 = VolkswagenPQPlatformConfig(
     [VWCarDocs("Audi TT 2008-14")],
-    VolkswagenCarSpecs(mass=1469, wheelbase=2.468, steerRatio=16.9, centerToFrontRatio=0.41),
+    # minSteerSpeed: assumes the EPS is patched to steer down to zero (pq-flasher)
+    VolkswagenCarSpecs(mass=1469, wheelbase=2.468, steerRatio=16.9, centerToFrontRatio=0.41, minSteerSpeed=0.),
     chassis_codes={"8J", "FK"},
     wmis={WMI.AUDI_HUNGARY},
     flags=VolkswagenFlags.PQ_CC_ONLY | VolkswagenFlags.NO_EXT_CAN,

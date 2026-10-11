@@ -3,6 +3,7 @@ from opendbc.car import structs
 from opendbc.car.chrysler.values import pacifica_hybrid_aol_requires_set_press
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, HyundaiFlags
 from opendbc.car.tesla.values import CAR as TESLA_CAR, TeslaFlags, TeslaSafetyFlags
+from opendbc.car.volkswagen.values import VolkswagenFlags
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.common.params import Params
 from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS, ButtonType, is_speed_limit_confirmation_pending
@@ -82,6 +83,10 @@ class StarPilotCard:
     self.g70_main_cruise_aol_pending = False
     self.g70_main_cruise_aol_pending_frames = 0
     self.prev_cruise_available = None
+    # StarPinguPilot: PQ cruise stalks latch on/off, so AOL on main must not arm if the
+    # stalk is already on at startup. Require seeing it off first.
+    self.aol_main_needs_off_first = self.CP.brand == "volkswagen" and bool(getattr(self.CP, "flags", 0) & VolkswagenFlags.PQ)
+    self.aol_main_seen_off = False
     self.prev_active = False
     self.prev_brake_pressed = False
     self.prev_cruise_enabled = False
@@ -406,6 +411,10 @@ class StarPilotCard:
           self.always_on_lateral_allowed = True
         if self.controller_aol_override is not None:
           self.always_on_lateral_allowed = self.pacifica_aol_set_seen and self.controller_aol_override
+      elif self.aol_main_needs_off_first:
+        if carState.canValid and not carState.cruiseState.available:
+          self.aol_main_seen_off = True
+        self.always_on_lateral_allowed = carState.cruiseState.available and self.aol_main_seen_off and self.controller_aol_override is not False
       else:
         self.always_on_lateral_allowed = carState.cruiseState.available and self.controller_aol_override is not False
 
