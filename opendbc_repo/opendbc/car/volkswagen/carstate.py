@@ -361,6 +361,18 @@ class CarState(CarStateBase):
 
     fp_ret = custom.StarPilotCarState.new_message()
 
+    # StarPinguPilot: light state for lightd. Gate_Komf_2 is only known to be present on the TT, and parsers add
+    # messages lazily, so other PQ cars never subscribe to it (a missing message would drop canValid).
+    if self.CP.flags & VolkswagenFlags.NO_EXT_CAN:
+      fp_ret.lowBeamOn = bool(pt_cp.vl["Gate_Komf_1"]["GK1_Abblendlicht"])
+      fp_ret.highBeamOn = bool(pt_cp.vl["Gate_Komf_1"]["GK1_Fernlicht"])
+      fp_ret.highBeamStalk = bool(pt_cp.vl["Gate_Komf_1"]["GK1_LS1_Fernlicht"])
+      fp_ret.frontWipersOn = bool(pt_cp.vl["Gate_Komf_1"]["GK1_Wischer_vorn"])
+      fp_ret.lightSensorBucket = int(round(pt_cp.vl["Gate_Komf_2"]["GK2_Helligkeit"] / 714.286))
+      fp_ret.lightSensorFault = bool(pt_cp.vl["Gate_Komf_2"]["GK2_LS_def"])
+    else:
+      fp_ret.lightSensorBucket = 255
+
     return ret, fp_ret
 
   def update_mlb(self, pt_cp, cam_cp, ext_cp) -> structs.CarState:

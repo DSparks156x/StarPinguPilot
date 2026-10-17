@@ -43,7 +43,7 @@ from openpilot.selfdrive.ui.layouts.settings.starpilot.aethergrid import (
   snap_rect,
   with_alpha,
 )
-from opendbc.car.volkswagen import hca_tuning
+from opendbc.car.volkswagen import fla, hca_tuning
 from openpilot.selfdrive.ui.lib.starpilot_state import starpilot_state
 from openpilot.selfdrive.ui.lib.fingerprint_catalog import (
   FingerprintModelOption,
@@ -83,7 +83,7 @@ def _lock_doors_timer_labels():
 
 
 # StarPinguPilot: Volkswagen PQ HCA tuning, param value = option index
-VOLKSWAGEN_HCA_SELECTORS = hca_tuning.HCA_SETTINGS
+VOLKSWAGEN_HCA_SELECTORS = {**hca_tuning.HCA_SETTINGS, **fla.LIGHTD_SETTINGS}
 
 
 SECTION_GAP = AETHER_LIST_METRICS.section_gap

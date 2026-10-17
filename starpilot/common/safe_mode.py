@@ -224,6 +224,7 @@ SAFE_MODE_MANAGED_KEYS = (
   "VolkswagenHCADeltaRateDown",
   "VolkswagenHCADeltaRateUp",
   "VolkswagenHCAMode",
+  "VolkswagenLightdMode",
 )
 
 SAFE_MODE_PRESERVED_KEYS = (

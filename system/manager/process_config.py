@@ -149,6 +149,11 @@ def run_stinger_object_shadow(started: bool, params: Params, CP: car.CarParams, 
           not getattr(starpilot_toggles, "no_logging", False))
 
 
+# StarPinguPilot: camera auto headlights + HBA (VolkswagenLightdMode >= 1, PQ only via the toggle condition)
+def run_lightd(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  return started and getattr(starpilot_toggles, "volkswagen_lightd_mode", 0) >= 1
+
+
 def big_device_ui_process() -> NativeProcess:
   return NativeProcess(
     "ui",
@@ -238,6 +243,7 @@ procs += [
   PythonProcess("speed_limit_vision", "starpilot.system.speed_limit_vision", run_speed_limit_vision, nice=19),
   PythonProcess("adj_spot_monitor_vision", "starpilot.system.adj_spot_monitor_vision", run_v_asm, nice=19),
   PythonProcess("stinger_object_shadow", "starpilot.system.stinger_object_shadow", run_stinger_object_shadow, nice=19),
+  PythonProcess("lightd", "starpilot.system.lightd.lightd", run_lightd, nice=10),
 ]
 
 managed_processes = {p.name: p for p in procs}

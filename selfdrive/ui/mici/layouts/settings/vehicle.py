@@ -1,4 +1,6 @@
-from opendbc.car.volkswagen.hca_tuning import HCA_SETTINGS as VOLKSWAGEN_HCA_SELECTORS
+from opendbc.car.volkswagen.fla import LIGHTD_SETTINGS
+from opendbc.car.volkswagen.hca_tuning import HCA_SETTINGS
+VOLKSWAGEN_HCA_SELECTORS = {**HCA_SETTINGS, **LIGHTD_SETTINGS}  # StarPinguPilot: PQ tuning + camera lights
 from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN_CAR, VolkswagenFlags
 from openpilot.common.params import Params
 from openpilot.starpilot.common.starpilot_variables import update_starpilot_toggles

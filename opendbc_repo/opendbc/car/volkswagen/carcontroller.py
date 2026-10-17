@@ -4,7 +4,7 @@ from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarControllerBase
-from opendbc.car.volkswagen import hca_tuning, mebcan, mlbcan, mqbcan, pqcan
+from opendbc.car.volkswagen import fla, hca_tuning, mebcan, mlbcan, mqbcan, pqcan
 from opendbc.car.volkswagen.values import CanBus, CarControllerParams, VolkswagenFlags
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -44,6 +44,8 @@ class CarController(CarControllerBase):
     self.eps_timer_soft_disable_alert = False
     self.hca_frame_timer_running = 0
     self.hca_frame_same_torque = 0
+    # StarPinguPilot: camera lights (mFLA_1) only when the panda latched the light TX bit at startup
+    self.fla_tx = bool(CP.flags & VolkswagenFlags.PQ and CP.safetyConfigs[-1].safetyParam & fla.PQ_LIGHT_TX)
 
   def update(self, CC, CS, now_nanos, starpilot_toggles):
     actuators = CC.actuators
@@ -189,6 +191,13 @@ class CarController(CarControllerBase):
         set_speed = hud_control.setSpeed * CV.MS_TO_KPH
         can_sends.append(self.CCS.create_acc_hud_control(self.packer_pt, self.CAN.pt, acc_hud_status, set_speed,
                                                          lead_distance, hud_control.leadDistanceBars))
+
+    # **** StarPinguPilot: camera lights for the patched J519 *************** #
+
+    if self.fla_tx and self.frame % fla.FLA_STEP == 0:
+      # set by card from lightd; invalid/off (J519 falls back to G397, no HBA) until lightd publishes
+      light, hba = getattr(CS, "fla_command", (fla.LIGHT_INVALID, fla.HBA_OFF))
+      can_sends.append(fla.create_fla_1(self.packer_pt, self.CAN.pt, light, hba))
 
     # **** Stock ACC Button Controls **************************************** #
 

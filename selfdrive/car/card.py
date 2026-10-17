@@ -19,6 +19,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
+from opendbc.car.volkswagen import fla
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.common.constants import CV
@@ -259,6 +260,11 @@ class Car:
     starpilot_services = ['starpilotOnroadEvents', 'starpilotPlan', 'starpilotSelfdriveState', 'liveCalibration', 'selfdriveState']
     if self.CP.brand == "rivian":
       starpilot_services.append('liveParameters')
+    # StarPinguPilot: lightd -> mFLA_1 camera lights, only when the panda latched the light TX bit at car start
+    self.lightd_tx = any(cfg.safetyModel == car.CarParams.SafetyModel.volkswagenPq and cfg.safetyParam & fla.PQ_LIGHT_TX
+                         for cfg in self.CP.safetyConfigs)
+    if self.lightd_tx:
+      starpilot_services.append('starpilotLightState')
     self.sm = self.sm.extend(starpilot_services)
     self.pm = self.pm.extend(['starpilotCarState'])
 
@@ -478,6 +484,7 @@ class Car:
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self._update_redneck_cruise(CS, CC)
       self._update_openpilot_lead_state(CC)
+      self._update_light_command()
       if self.CP.brand == "rivian" and self.sm.all_checks(['liveParameters']) and hasattr(self.CI.CC, 'update_live_params'):
         live_params = self.sm['liveParameters']
         self.CI.CC.update_live_params(live_params.roll, live_params.angleOffsetDeg,
@@ -488,6 +495,24 @@ class Car:
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
+
+  def _update_light_command(self) -> None:
+    # StarPinguPilot: lightd output -> semantic J519 commands, packed by opendbc/car/volkswagen/fla.py.
+    # Low beam and HBA lapse independently: a stale or missing lightd message revokes both, lightd's own
+    # validity flags revoke each one. Mode is read live, so lowering it mid-drive takes effect immediately.
+    if not self.lightd_tx:
+      return
+    light, hba = fla.LIGHT_INVALID, fla.HBA_OFF
+    mode = getattr(self.starpilot_toggles, "volkswagen_lightd_mode", fla.LIGHTD_OFF)
+    if self.sm.alive['starpilotLightState'] and self.sm.valid['starpilotLightState']:
+      ls = self.sm['starpilotLightState']
+      # an out-of-range code from lightd means the estimate is not trustworthy: send invalid, never crash card
+      if mode >= fla.LIGHTD_LOW_BEAM and ls.lowBeamValid and 0 <= ls.brightnessCode <= 7:
+        light = fla.LightCommand(valid=True, headlight_on=bool(ls.darkRequest), brightness=int(ls.brightnessCode))
+      if mode >= fla.LIGHTD_LOW_AND_HIGH_BEAM and ls.hbaValid:
+        hba = fla.HbaCommand(active=True, permitted=ls.highBeamPermitted, reason=ls.hbaReason,
+                             sensor_blocked=ls.sensorBlocked)
+    self.CI.CS.fla_command = (light, hba)
 
   def _update_openpilot_lead_state(self, CC: car.CarControl) -> None:
     lead_visible = bool(CC.hudControl.leadVisible)

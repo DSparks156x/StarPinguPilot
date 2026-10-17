@@ -1533,6 +1533,28 @@ BO_ 2000 Diagnose_1: 8 XXX
  SG_ DI1_KM_Stand_alt : 62|1@1+ (1,0) [0|1] "" XXX
  SG_ DI1_Zeit_alt : 63|1@1+ (1,0) [0|1] "" XXX
 
+BO_ 1626 mFLA_1: 8 XXX
+ SG_ FL1_KD_Fehler : 12|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_FLA_aktiv : 13|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_ISP_defekt : 14|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_Sensor_blockiert : 15|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_Abblendursache : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ FL1_Fernlicht_PWM : 24|7@1+ (1,0) [0|127] "Unit_PerCent" XXX
+ SG_ FL1_ISP_Lichtwert_vo : 32|6@1+ (1,0) [0|63] "" XXX
+ SG_ FL1_ISP_Lichtwert_hi : 40|6@1+ (1,0) [0|63] "" XXX
+ SG_ FL1_ISP_Himmelsrichtung : 48|5@1+ (1,0) [0|31] "" XXX
+ SG_ FL1_ISP_Taste : 53|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_ISP_EC_aktiv : 54|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_ISP_Kompass_aktiv : 55|1@1+ (1,0) [0|1] "" XXX
+ SG_ FL1_Dimmwert_ASP : 56|6@1+ (1,0) [0|63] "" XXX
+ SG_ FL1_FLA_Aufblenden : 62|1@1+ (1,0) [0|1] "" XXX
+
+CM_ BO_ 1626 "StarPinguPilot: high beam assist camera / interior mirror (FLA), PQ35_46 ACAN K-matrix V5.20.6F rows 710-729. Raw values (no scaling). Zero-based byte 0 (matrix void) carries the comma low-beam command, see car/volkswagen/fla.py";
+CM_ SG_ 1626 FL1_Abblendursache "Dip reason bits: 1 oncoming, 2 preceding, 4 below speed, 8 town, 16 too bright, 32 fog, 64 imager overtemperature, 128 delay condition, 255 error";
+CM_ SG_ 1626 FL1_Fernlicht_PWM "Requested high beam level 0..100 %, 127 error (J519 doubles the raw value, never send 127)";
+CM_ SG_ 1626 FL1_ISP_defekt "Latches a sticky fault in the J519 until power cycle";
+CM_ SG_ 1626 FL1_ISP_Himmelsrichtung "Raw compass, 12 deg per count, 30 init, 31 error";
+CM_ SG_ 1626 FL1_Dimmwert_ASP "Raw exterior mirror dimming, 1.613 % per count, 63 error";
 CM_ SG_ 80 Checksumme_Airbag_1 "Checksum Airbag_1";
 CM_ SG_ 80 Zaehler_Airbag_1 "Counter Airbag_1";
 

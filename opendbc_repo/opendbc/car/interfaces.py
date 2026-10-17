@@ -24,6 +24,7 @@ from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, 
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.subaru.values import CAR as SUBARU, SUBARU_REDNECK_CRUISE_CARS, SubaruSafetyFlags
 from opendbc.car.toyota.values import CAR as TOYOTA, NO_DSU_CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaStarPilotFlags, ToyotaSafetyFlags
+from opendbc.car.volkswagen.fla import LIGHTD_LOW_BEAM, PQ_LIGHT_TX
 from opendbc.car.volkswagen.hca_tuning import encode_pq_safety_param
 from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN, VolkswagenFlags
 from opendbc.car.values import PLATFORMS
@@ -336,6 +337,9 @@ class CarInterfaceBase(ABC):
         # StarPinguPilot: latch the selected HCA rates into the panda safety param
         if CP.flags & VolkswagenFlags.PQ:
           rate_bits = encode_pq_safety_param(params.get_int("VolkswagenHCADeltaRateUp"), params.get_int("VolkswagenHCADeltaRateDown"))
+          # StarPinguPilot: camera lights (mFLA_1 0x65A) on the TT bus, only if selected at car start
+          if CP.flags & VolkswagenFlags.NO_EXT_CAN and params.get_int("VolkswagenLightdMode") >= LIGHTD_LOW_BEAM:
+            rate_bits |= PQ_LIGHT_TX
           CP.safetyConfigs[-1].safetyParam |= rate_bits
           fp_ret.safetyConfigs[-1].safetyParam |= rate_bits
 

@@ -819,4 +819,5 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VolkswagenHCADeltaRateDown", {PERSISTENT, INT, "0", "0", 2}},
     {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0", "0", 2}},
     {"VolkswagenHCAMode", {PERSISTENT, INT, "1", "0", 2}},
+    {"VolkswagenLightdMode", {PERSISTENT, INT, "0", "0", 2}},
 };

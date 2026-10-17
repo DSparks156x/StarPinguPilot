@@ -1668,6 +1668,7 @@ class StarPilotVariables:
     toggle.volkswagen_hca_mode = self.get_value("VolkswagenHCAMode", cast=int, condition=volkswagen_pq)
     toggle.volkswagen_hca_delta_rate_up = self.get_value("VolkswagenHCADeltaRateUp", cast=int, condition=volkswagen_pq)
     toggle.volkswagen_hca_delta_rate_down = self.get_value("VolkswagenHCADeltaRateDown", cast=int, condition=volkswagen_pq)
+    toggle.volkswagen_lightd_mode = self.get_value("VolkswagenLightdMode", cast=int, condition=volkswagen_pq)
 
     process_starpilot_toggles.cache_clear()
     if clear_update_flag:

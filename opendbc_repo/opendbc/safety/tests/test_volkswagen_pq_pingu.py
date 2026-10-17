@@ -58,6 +58,41 @@ class TestVolkswagenPqNoExtCanSafety(pq.TestVolkswagenPqStockSafety):
     self.assertTrue(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP, hca_status=7)))
 
 
+MSG_MFLA_1 = 0x65A
+
+
+class TestVolkswagenPqLightSafety(TestVolkswagenPqNoExtCanSafety):
+  # camera lights for the patched J519: mFLA_1 only with the light TX bit, on bus 1, without relay check
+  TX_MSGS = [[MSG_HCA_1, 1], [MSG_GRA_NEU, 1], [MSG_LDW_1, 1], [MSG_MFLA_1, 1]]
+
+  def setUp(self):
+    self.packer = CANPackerSafety("vw_pq")
+    self.safety = libsafety_py.libsafety
+    param = VolkswagenSafetyFlags.PQ_NO_EXT_CAN.value | VolkswagenSafetyFlags.PQ_LIGHT_TX.value
+    self.safety.set_safety_hooks(CarParams.SafetyModel.volkswagenPq, param)
+    self.safety.init_tests()
+
+  def _fla_msg(self, **values):
+    return self.packer.make_can_msg_safety("mFLA_1", self.BUS, values)
+
+  def test_fla_allowed_regardless_of_controls(self):
+    for controls_allowed in (False, True):
+      self.safety.set_controls_allowed(controls_allowed)
+      self.assertTrue(self._tx(self._fla_msg(FL1_Fernlicht_PWM=100, FL1_FLA_Aufblenden=1, FL1_FLA_aktiv=1)))
+      self.assertTrue(self._tx(self._fla_msg(FL1_Abblendursache=255)))
+
+  def test_fla_sticky_defect_blocked(self):
+    self.assertFalse(self._tx(self._fla_msg(FL1_ISP_defekt=1)))
+
+  def test_fla_pwm_range(self):
+    for pwm in (0, 50, 100, 101, 126, 127):
+      with self.subTest(pwm=pwm):
+        self.assertEqual(self._tx(self._fla_msg(FL1_Fernlicht_PWM=pwm, FL1_FLA_Aufblenden=1)), pwm <= 100)
+
+  def test_fla_only_on_bus_1(self):
+    self.assertFalse(self._tx(self.packer.make_can_msg_safety("mFLA_1", 0, {})))
+
+
 class TestVolkswagenPqRateSafety(pq.TestVolkswagenPqStockSafety):
   # The common realtime limit test needs MAX_RT_DELTA < MAX_TORQUE, so the faster rates are covered by test_all_rates
   RATE_UP_IDX = 0

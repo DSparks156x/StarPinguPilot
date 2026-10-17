@@ -1164,6 +1164,10 @@ class SafetyTest(SafetyTestBase):
                                                                       'TestHyundaiLegacyLongitudinalSafetyHEV'):
               # exceptions for common msgs across different Hyundai CAN platforms
               tx = list(filter(lambda m: m[0] not in [0x420, 0x50A, 0x389, 0x4A2], tx))
+
+            # StarPinguPilot: the PQ camera-light frame (mFLA_1 0x65A, not actuating) is inside ELM327's diagnostic range
+            if attr == 'TestElm327' and current_test == 'TestVolkswagenPqLightSafety':
+              tx = list(filter(lambda m: m[0] != 0x65A, tx))
             all_tx.append([[m[0], m[1], attr] for m in tx])
 
     # make sure we got all the msgs
