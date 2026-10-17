@@ -432,8 +432,10 @@ class Updater:
 
     run(["git", "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], OVERLAY_MERGED)
 
+    # Shallow fetch: only the new tip is needed, and without --depth a rebased/force-pushed
+    # branch makes a shallow device clone pull the branch's entire history
     branch = self.target_branch
-    git_fetch_output = run_with_offroad_abort(["git", "fetch", "origin", branch], self.params, OVERLAY_MERGED)
+    git_fetch_output = run_with_offroad_abort(["git", "fetch", "--depth=1", "origin", branch], self.params, OVERLAY_MERGED)
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
