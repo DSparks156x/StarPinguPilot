@@ -7,10 +7,13 @@ is 2 (low beam) or 3 (low + high beam); mode 1 only logs. See DESIGN.md.
 Low beam and HBA have independent validity, as the J519 contract requires:
   lowBeamValid: fresh, advancing camera AE state and a settled estimator.
   hbaValid:     a narrow-camera frame processed within HBA_STALE_S with a fresh model and a valid calibration.
+The HBA runs on its own thread (HbaWorker), so its cost never slows the loop or the message's validity.
 """
 import json
 import math
+import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import cv2
@@ -18,19 +21,16 @@ import numpy as np
 
 import cereal.messaging as messaging
 from cereal import log
-from openpilot.common.gps import get_gps_location_service
-from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
-from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles
 from openpilot.starpilot.system.lightd.ambient import AmbientEstimator, CameraSample
-from openpilot.starpilot.system.lightd.hba import HbaClassifier, REASON_FAULT
+from openpilot.starpilot.system.lightd.hba import HbaClassifier, HbaOut, Nv12Frame, REASON_FAULT
 from openpilot.starpilot.system.lightd.solar import solar_position
 
 MODE_OFF, MODE_SHADOW, MODE_LOW_BEAM, MODE_LOW_AND_HIGH_BEAM = range(4)  # same as opendbc volkswagen/fla.py
 
-HBA_PERIOD_S = 0.1     # run the HBA classifier at ~10 Hz
-HBA_STALE_S = 0.3      # no processed frame for this long: HBA invalid
+HBA_PERIOD_S = 0.1     # run the HBA classifier at up to ~10 Hz
+HBA_STALE_S = 0.3      # no processed frame for this long (slow or dead worker): HBA invalid
 MODEL_MAX_FRAME_LAG = 5
 SOLAR_PERIOD_S = 1.0
 GPS_CACHE_MAX_AGE_S = 7 * 24 * 3600  # a week-old position still puts sunset within minutes
@@ -59,7 +59,7 @@ def model_dict(md):
 class SolarTracker:
   """Sun position from live GPS, falling back to the last known position and the system clock."""
 
-  def __init__(self, params: Params):
+  def __init__(self, params):
     self.params = params
     self.lat = self.lon = None
     self.elev = self.azim = None
@@ -87,6 +87,26 @@ class SolarTracker:
     self.elev, self.azim = solar_position(self.lat, self.lon, wall_time())
 
 
+@dataclass
+class HbaContext:
+  """What the HBA needs from lightd's loop, captured on the main thread. capnp readers are immutable."""
+  now: float
+  dark: bool
+  calib: log.LiveCalibrationData
+  model: log.ModelDataV2
+  model_alive: bool
+  car_alive: bool
+  v_ego: float
+
+
+@dataclass
+class HbaResult:
+  t: float                # lightd clock of the context the frame was processed with
+  out: HbaOut | None      # None: the classifier raised
+  frame_id: int
+  processing_ms: float
+
+
 class HbaRunner:
   """Pulls the newest narrow-camera frame and runs the HBA classifier on it."""
 
@@ -94,9 +114,7 @@ class HbaRunner:
     self.client = None
     self.clf = HbaClassifier()
     self.last_run = -math.inf
-    self.last_out = None
     self.last_frame_id = 0
-    self.processing_ms = 0.0
 
   def _connect(self):
     from msgq.visionipc import VisionIpcClient, VisionStreamType
@@ -106,7 +124,7 @@ class HbaRunner:
       self.client.connect(False)
     return self.client.is_connected()
 
-  def _latest_bgr(self):
+  def _latest_frame(self):
     buf = None
     while True:
       b = self.client.recv(timeout_ms=0)
@@ -115,79 +133,128 @@ class HbaRunner:
       buf = b
     if buf is None:
       return None, None
-    c = self.client
-    img = np.frombuffer(buf.data, dtype=np.uint8).reshape((len(buf.data) // c.stride, c.stride))
-    return cv2.cvtColor(img[:c.height * 3 // 2, :c.width], cv2.COLOR_YUV2BGR_NV12), c.frame_id
+    # left in NV12: the classifier converts only the corridor's box
+    data = np.frombuffer(buf.data, dtype=np.uint8)
+    w, h, stride = buf.width, buf.height, buf.stride
+    y = data[:h * stride].reshape(h, stride)[:, :w]
+    uv = data[buf.uv_offset:buf.uv_offset + h // 2 * stride].reshape(h // 2, stride)[:, :w]
+    return Nv12Frame(y, uv), self.client.frame_id
 
-  def update(self, now, sm, dark):
-    if now - self.last_run < HBA_PERIOD_S:
-      return
+  def update(self, ctx: HbaContext) -> HbaResult | None:
+    """None when nothing was processed (not due yet, no camera, no new frame)."""
+    if ctx.now - self.last_run < HBA_PERIOD_S:
+      return None
     if not self._connect():
-      return
+      return None
     t0 = time.monotonic()
-    bgr, frame_id = self._latest_bgr()
-    if bgr is None:
-      return
-    calib = sm["liveCalibration"]
-    md = sm["modelV2"]
+    frame, frame_id = self._latest_frame()
+    if frame is None:
+      return None
+    calib, md = ctx.calib, ctx.model
     calibrated = calib.calStatus == log.LiveCalibrationData.Status.calibrated and len(calib.rpyCalib) == 3
-    model_fresh = sm.alive["modelV2"] and abs(int(frame_id) - int(md.frameId)) <= MODEL_MAX_FRAME_LAG
-    valid = bool(calibrated and model_fresh and sm.alive["carState"])
+    model_fresh = ctx.model_alive and abs(int(frame_id) - int(md.frameId)) <= MODEL_MAX_FRAME_LAG
+    valid = bool(calibrated and model_fresh and ctx.car_alive)
     height = calib.height[0] if len(calib.height) else 1.22
-    self.last_out = self.clf.update(now, bgr, model_dict(md) if valid else None,
-                                    list(calib.rpyCalib) if calibrated else None, height, sm["carState"].vEgo,
-                                    dark=dark, valid=valid)
-    self.last_run = now
+    out = self.clf.update(ctx.now, frame, model_dict(md) if valid else None, list(calib.rpyCalib) if calibrated else None,
+                          height, ctx.v_ego, dark=ctx.dark, valid=valid)
+    self.last_run = ctx.now
     self.last_frame_id = int(frame_id)
-    self.processing_ms = (time.monotonic() - t0) * 1e3
+    return HbaResult(ctx.now, out, self.last_frame_id, (time.monotonic() - t0) * 1e3)
 
 
-def main():
-  params = Params()
-  wide_disabled = params.get_bool("DisableWideRoad")
-  poll = "roadCameraState" if wide_disabled else "wideRoadCameraState"
-  gps_service = get_gps_location_service(params)
-  sm = messaging.SubMaster(["wideRoadCameraState", "roadCameraState", gps_service, "carState", "starpilotCarState",
-                            "modelV2", "liveCalibration", "starpilotPlan"], poll=poll)
-  pm = messaging.PubMaster(["starpilotLightState"])
+class HbaWorker:
+  """Runs the HBA on its own thread, at whatever rate it manages. lightd's loop hands it the newest context and
+  reads the newest result, never waiting: a slow or dead HBA only lets hbaValid lapse, the low beam keeps going."""
 
-  ambient = AmbientEstimator()
-  solar = SolarTracker(params)
-  hba = HbaRunner()
-  last_frame = {"wideRoadCameraState": -1, "roadCameraState": -1}
-  last_sample: dict[str, CameraSample | None] = {"wideRoadCameraState": None, "roadCameraState": None}
+  def __init__(self, runner: HbaRunner | None = None):
+    self.runner = runner or HbaRunner()
+    self._lock = threading.Lock()
+    self._wake = threading.Event()
+    self._ctx: HbaContext | None = None
+    self._result: HbaResult | None = None
+    self._thread: threading.Thread | None = None
 
-  while True:
-    sm.update()
-    now = sm.logMonoTime[poll] * 1e-9
-    mode = int(getattr(get_starpilot_toggles(sm), "volkswagen_lightd_mode", MODE_SHADOW))
+  def submit(self, ctx: HbaContext):
+    with self._lock:
+      self._ctx = ctx
+    self._wake.set()
+    if self._thread is None:
+      self._thread = threading.Thread(target=self._run, name="lightd_hba", daemon=True)
+      self._thread.start()
+
+  @property
+  def alive(self) -> bool:
+    return self._thread is not None and self._thread.is_alive()
+
+  def result(self) -> HbaResult | None:
+    with self._lock:
+      return self._result
+
+  def _run(self):
+    while True:
+      self._wake.wait()
+      self._wake.clear()
+      with self._lock:
+        ctx, self._ctx = self._ctx, None
+      if ctx is None:
+        continue
+      try:
+        res = self.runner.update(ctx)
+      except Exception:
+        cloudlog.exception("lightd: hba failed")
+        res = HbaResult(ctx.now, None, self.runner.last_frame_id, 0.0)
+      if res is not None:
+        with self._lock:
+          self._result = res
+
+
+class LightD:
+  def __init__(self, wide_disabled: bool, gps_service: str, solar: SolarTracker, hba: HbaWorker | None = None):
+    self.wide_disabled = wide_disabled
+    self.poll = "roadCameraState" if wide_disabled else "wideRoadCameraState"
+    self.gps_service = gps_service
+    self.ambient = AmbientEstimator()
+    self.solar = solar
+    self.hba = hba or HbaWorker()
+    self.last_frame = {"wideRoadCameraState": -1, "roadCameraState": -1}
+    self.last_sample: dict[str, CameraSample | None] = {"wideRoadCameraState": None, "roadCameraState": None}
+
+  def submaster(self):
+    # No average-rate check on the poll service: it would measure this loop, not the cameras. Camera freshness is
+    # covered by alive here and by the estimator's frame ages (lowBeamValid); card checks this message's own age.
+    return messaging.SubMaster(["wideRoadCameraState", "roadCameraState", self.gps_service, "carState",
+                                "starpilotCarState", "modelV2", "liveCalibration", "starpilotPlan"],
+                               poll=self.poll, ignore_avg_freq=[self.poll])
+
+  def step(self, sm, mode: int):
+    now = sm.logMonoTime[self.poll] * 1e-9
 
     # camera samples only count while their frameId advances; a frozen camera goes stale
-    for svc in last_frame:
+    for svc in self.last_frame:
       if sm.updated[svc] and sm.valid[svc]:
         cs = sm[svc]
-        if cs.frameId != last_frame[svc]:
-          last_frame[svc] = cs.frameId
-          last_sample[svc] = CameraSample(sm.logMonoTime[svc] * 1e-9, cs.measuredGreyFraction, cs.exposureValPercent,
-                                          cs.frameId)
-    wide = None if wide_disabled else last_sample["wideRoadCameraState"]
-    narrow = last_sample["roadCameraState"]
+        if cs.frameId != self.last_frame[svc]:
+          self.last_frame[svc] = cs.frameId
+          self.last_sample[svc] = CameraSample(sm.logMonoTime[svc] * 1e-9, cs.measuredGreyFraction, cs.exposureValPercent,
+                                               cs.frameId)
+    wide = None if self.wide_disabled else self.last_sample["wideRoadCameraState"]
+    narrow = self.last_sample["roadCameraState"]
 
-    solar.update(now, sm[gps_service] if sm.alive[gps_service] else None)
+    solar = self.solar
+    solar.update(now, sm[self.gps_service] if sm.alive[self.gps_service] else None)
     fpcs = sm["starpilotCarState"]
-    amb = ambient.update(now, wide, narrow, solar.elev, sm["carState"].vEgo, fpcs.lowBeamOn)
+    amb = self.ambient.update(now, wide, narrow, solar.elev, sm["carState"].vEgo, fpcs.lowBeamOn)
 
     run_hba = mode in (MODE_SHADOW, MODE_LOW_AND_HIGH_BEAM)
     if run_hba:
-      try:
-        hba.update(now, sm, dark=amb.valid and amb.dark_request)
-      except Exception:
-        cloudlog.exception("lightd: hba failed")
-        hba.last_out = None
-    ho = hba.last_out
-    hba_valid = run_hba and ho is not None and ho.valid and now - hba.last_run < HBA_STALE_S
+      self.hba.submit(HbaContext(now, bool(amb.valid and amb.dark_request), sm["liveCalibration"], sm["modelV2"],
+                                 sm.alive["modelV2"], sm.alive["carState"], sm["carState"].vEgo))
+    res = self.hba.result()
+    fresh = run_hba and self.hba.alive and res is not None and now - res.t < HBA_STALE_S
+    ho = res.out if fresh else None
+    hba_valid = ho is not None and ho.valid
 
-    msg = messaging.new_message("starpilotLightState", valid=sm.all_checks([poll]))
+    msg = messaging.new_message("starpilotLightState", valid=sm.all_checks([self.poll]))
     ls = msg.starpilotLightState
     ls.mode = mode
     ls.lowBeamValid = bool(amb.valid)
@@ -209,12 +276,31 @@ def main():
     ls.precedingCount = int(ho.n_preceding) if ho else 0
     ls.candidateCount = int(ho.n_candidates) if ho else 0
     ls.hbaClearForS = float(ho.clear_for_s) if ho else 0.0
-    ls.hbaFrameId = hba.last_frame_id
-    ls.hbaProcessingMs = float(hba.processing_ms)
+    ls.hbaFrameId = res.frame_id if res else 0
+    ls.hbaProcessingMs = float(res.processing_ms) if res else 0.0
     for field, svc in (("wideFrameAgeMs", "wideRoadCameraState"), ("narrowFrameAgeMs", "roadCameraState")):
-      s = last_sample[svc]
+      s = self.last_sample[svc]
       setattr(ls, field, float((now - s.t) * 1e3) if s is not None else -1.0)
-    pm.send("starpilotLightState", msg)
+    return msg
+
+
+def main():
+  # imported here so LightD can be tested without the compiled params module and the full toggle stack
+  from openpilot.common.gps import get_gps_location_service
+  from openpilot.common.params import Params
+  from openpilot.starpilot.common.starpilot_variables import get_starpilot_toggles
+
+  # lightd runs at nice 10 next to the realtime daemons. One OpenCV thread: a thread pool on contended cores waits
+  # for its slowest worker on every call, and the HBA's images are small strips.
+  cv2.setNumThreads(1)
+  params = Params()
+  lightd = LightD(params.get_bool("DisableWideRoad"), get_gps_location_service(params), SolarTracker(params))
+  sm = lightd.submaster()
+  pm = messaging.PubMaster(["starpilotLightState"])
+  while True:
+    sm.update()
+    mode = int(getattr(get_starpilot_toggles(sm), "volkswagen_lightd_mode", MODE_SHADOW))
+    pm.send("starpilotLightState", lightd.step(sm, mode))
 
 
 if __name__ == "__main__":

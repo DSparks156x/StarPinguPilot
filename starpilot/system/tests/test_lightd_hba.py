@@ -1,8 +1,10 @@
+import cv2
 import numpy as np
 import pytest
 
-from openpilot.starpilot.system.lightd.hba import (FCAM_H, FCAM_W, Geometry, HbaClassifier, REASON_DELAY, REASON_FAULT,
-                                                    REASON_ONCOMING, REASON_SPEED, find_blobs, HbaParams, rot_from_euler)
+from openpilot.starpilot.system.lightd.hba import (FCAM_H, FCAM_W, Geometry, HbaClassifier, Nv12Frame, REASON_DELAY,
+                                                    REASON_FAULT, REASON_ONCOMING, REASON_SPEED, corridor_mask, find_blobs,
+                                                    HbaParams, road_centerline, rot_from_euler)
 
 HEIGHT = 1.22
 STRAIGHT = {
@@ -59,6 +61,25 @@ def test_finds_white_and_red_but_not_amber():
   blobs = find_blobs(img, mask, HbaParams())
   assert sorted(b.red for b in blobs) == [False, True]
   assert all(abs(b.u - 701.5) > 10 for b in blobs)
+
+
+def test_nv12_crop_matches_full_conversion():
+  rng = np.random.default_rng(0)
+  nv12 = rng.integers(0, 256, (FCAM_H * 3 // 2, FCAM_W), dtype=np.uint8)
+  full = cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+  frame = Nv12Frame(nv12[:FCAM_H], nv12[FCAM_H:])
+  for x, y, w, h in ((0, 0, FCAM_W, FCAM_H), (187, 318, 781, 127), (1, 1, 1, 1), (FCAM_W - 3, FCAM_H - 5, 3, 5), (10, 11, 2, 3)):
+    assert np.array_equal(frame.crop_bgr(x, y, w, h), full[y:y + h, x:x + w])
+
+
+@pytest.mark.parametrize("rpy", [[0.0, 0.0, 0.0], [0.0, 0.05, 0.02], [0.02, -0.04, -0.03]])
+def test_corridor_mask_matches_full_frame_dilation(rpy):
+  p = HbaParams()
+  geom = Geometry(rpy, HEIGHT)
+  mask = corridor_mask(geom, road_centerline(STRAIGHT, p), p)
+  undilated = corridor_mask(geom, road_centerline(STRAIGHT, p), HbaParams(margin_px=0))
+  k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * p.margin_px + 1, 2 * p.margin_px + 1))
+  assert undilated.any() and np.array_equal(mask, cv2.dilate(undilated, k))
 
 
 def test_dark_empty_road_restores_high_beam_after_clear_time():

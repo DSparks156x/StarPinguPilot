@@ -76,7 +76,15 @@ class HbaParams:
                                      # roadside reflectors are already classified static by then)
   strong_area: int = 25              # ...unless big or saturated: those dip at once
   strong_peak: int = 250
-  strong_peak_area: int = 8
+  strong_peak_area: int = 16         # small saturated dots are often delineators lit by our beams
+  # far-light vehicle evidence: delineators and porch lights are single dots, vehicles show two lamps on one row
+  pair_max_dx: int = 60              # px between partner lamps
+  pair_dy_frac: float = 0.3          # allowed row offset as a fraction of the separation (+2 px)
+  pair_area_ratio: float = 4.0
+  wide_ratio: float = 1.8            # w/h of one blob that already is two merged lamps
+  post_ratio: float = 1.5            # h/w of a white blob that is a delineator reflector
+  pair_window: int = 10
+  pair_min: int = 2
   roadside_angle_deg: float = 3.3    # off-path angle on the non-oncoming side beyond which a light is roadside
                                      # (in-lane vehicles only get there inside ~40 m, where the model lead has them).
                                      # Angle = lateral / distance, so it survives the unknown lamp height.
@@ -102,12 +110,14 @@ class Blob:
   peak_y: int
   red: bool
   bbox: tuple
+  paired: bool = False  # has a same-colour partner on its row, or is a wide blob (two lamps merged)
+  post: bool = False    # tall white rectangle: delineator reflector, not a lamp
 
 
 @dataclass
 class Track:
   tid: int
-  hist: list = field(default_factory=list)  # (t, u, v, dist, lateral, area, red, peak, angle_deg)
+  hist: list = field(default_factory=list)  # (t, u, v, dist, lateral, area, red, peak, angle_deg, paired, post)
   missed: int = 0
   kind: str = KIND_CANDIDATE
   obj_speed: float = float("nan")
@@ -124,7 +134,15 @@ class Track:
     return area >= p.strong_area or (peak >= p.strong_peak and area >= p.strong_peak_area)
 
   def is_threat(self, p):
-    return self.kind != KIND_STATIC and (self.age >= p.confirm_frames or self.strong(p))
+    if self.kind == KIND_STATIC:
+      return False
+    if self.strong(p):
+      return True
+    if self.age < p.confirm_frames:
+      return False
+    # far lights (no usable motion) must look like a vehicle: a lamp pair, not a lone delineator or porch light
+    far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
+    return not far or sum(h[9] for h in self.hist[-p.pair_window:]) >= p.pair_min
 
 
 @dataclass
@@ -217,17 +235,40 @@ def corridor_mask(geom: Geometry, center, p: HbaParams):
       continue
     hull = cv2.convexHull(poly.astype(np.float32)).astype(np.int32)
     cv2.fillConvexPoly(mask, hull, 255)
-  if p.margin_px > 0:
-    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * p.margin_px + 1, 2 * p.margin_px + 1)))
+  bx, by, bw, bh = cv2.boundingRect(mask)
+  if p.margin_px > 0 and bw > 0:
+    # dilate only the corridor's box plus the margin; everything outside it is zero and stays zero
+    m = p.margin_px
+    x0, y0, x1, y1 = max(0, bx - m), max(0, by - m), min(geom.w, bx + bw + m), min(geom.h, by + bh + m)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * m + 1, 2 * m + 1))
+    mask[y0:y1, x0:x1] = cv2.dilate(mask[y0:y1, x0:x1], k)
   return mask
 
 
-def find_blobs(bgr, mask, p: HbaParams):
+class Nv12Frame:
+  """A camera frame left in NV12 (y: HxW, uv: H/2xW interleaved), converted to BGR only where it's looked at."""
+
+  def __init__(self, y, uv):
+    self.y, self.uv = y, uv
+    self.shape = (*y.shape, 3)
+
+  def crop_bgr(self, x, y, w, h):
+    # chroma is shared per 2x2 block: convert an even-aligned box, then trim. Same pixels as converting it all.
+    x0, y0 = x & ~1, y & ~1
+    x1, y1 = min(self.shape[1], (x + w + 1) & ~1), min(self.shape[0], (y + h + 1) & ~1)
+    nv12 = np.concatenate([self.y[y0:y1, x0:x1], self.uv[y0 // 2:y1 // 2, x0:x1]])
+    bgr = cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)
+    return bgr[y - y0:y - y0 + h, x - x0:x - x0 + w]
+
+
+def find_blobs(frame, mask, p: HbaParams):
+  """frame: BGR array or Nv12Frame."""
   # only the corridor's bounding box is converted and labelled; it is a band of ~100-200 rows, not the whole frame
   ox, oy, cw, ch = cv2.boundingRect(mask)
   if cw == 0 or ch == 0:
     return []
-  blobs = find_blobs_in(bgr[oy:oy + ch, ox:ox + cw], mask[oy:oy + ch, ox:ox + cw], p)
+  crop = frame.crop_bgr(ox, oy, cw, ch) if isinstance(frame, Nv12Frame) else frame[oy:oy + ch, ox:ox + cw]
+  blobs = find_blobs_in(crop, mask[oy:oy + ch, ox:ox + cw], p)
   for b in blobs:
     b.u += ox
     b.v += oy
@@ -235,17 +276,31 @@ def find_blobs(bgr, mask, p: HbaParams):
   return blobs
 
 
+def components(m):
+  """connectedComponentsWithStats(m), labelled only inside the box around m's lit pixels (a night frame is mostly
+  dark). The box is 2-px aligned so the labelling sees the same blocks; stats and centroids are in m's pixels."""
+  x, y, w, h = cv2.boundingRect(m)
+  if w == 0:
+    return 1, np.zeros((1, 5), np.int32), np.zeros((1, 2))
+  x0, y0 = x & ~1, y & ~1
+  n, _, stats, cents = cv2.connectedComponentsWithStats(m[y0:y + h, x0:x + w], connectivity=8)
+  stats[:, cv2.CC_STAT_LEFT] += x0
+  stats[:, cv2.CC_STAT_TOP] += y0
+  return n, stats, cents + (x0, y0)
+
+
 def find_blobs_in(bgr, mask, p: HbaParams):
   y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
   hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-  hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-  inside = mask > 0
-  white = ((y >= p.white_y) & inside).astype(np.uint8)
+  val = hsv[..., 2]
+  # cv2 thresholds instead of numpy boolean algebra: same masks, a fraction of the passes
+  white = cv2.bitwise_and(cv2.threshold(y, p.white_y - 1, 255, cv2.THRESH_BINARY)[1], mask)
   # taillights: saturated red; yellow signs, amber reflectors and warm windows have hue ~12..35
-  red = (((hue <= p.red_hue) | (hue >= 180 - p.red_hue)) & (sat >= p.red_sat) & (val >= p.red_v) & inside).astype(np.uint8)
+  red = cv2.bitwise_and(cv2.inRange(hsv, (0, p.red_sat, p.red_v), (p.red_hue, 255, 255)) |
+                        cv2.inRange(hsv, (180 - p.red_hue, p.red_sat, p.red_v), (255, 255, 255)), mask)
   blobs = []
   for m, is_red in ((white, False), (red, True)):
-    n, _, stats, cents = cv2.connectedComponentsWithStats(m, connectivity=8)
+    n, stats, cents = components(m)
     for i in range(1, n):
       area = int(stats[i, cv2.CC_STAT_AREA])
       if not (p.min_area <= area <= p.max_area):
@@ -268,7 +323,24 @@ def find_blobs_in(bgr, mask, p: HbaParams):
         if x0 - pad <= b.u <= x0 + w + pad and y0 - pad <= b.v <= y0 + h + pad:
           return True
     return False
-  return [b for b in blobs if b.red or not inside_red(b)]
+  blobs = [b for b in blobs if b.red or not inside_red(b)]
+
+  for a in blobs:
+    a.post = not a.red and a.bbox[3] >= 3 and a.bbox[3] >= p.post_ratio * a.bbox[2]
+  for i, a in enumerate(blobs):
+    w, h = a.bbox[2], a.bbox[3]
+    if a.post:
+      continue
+    partners = 0
+    for j, b in enumerate(blobs):
+      if i == j or a.red != b.red or b.post:
+        continue
+      dx, dy = abs(a.u - b.u), abs(a.v - b.v)
+      if 2 <= dx <= p.pair_max_dx and dy <= 2 + p.pair_dy_frac * dx and max(a.area, b.area) <= p.pair_area_ratio * min(a.area, b.area):
+        partners += 1
+    # exactly one partner: a lamp pair. Two or more: a row of house/street lights or a delineator chain.
+    a.paired = partners == 1 or (partners == 0 and w >= 3 and w >= p.wide_ratio * h)
+  return blobs
 
 
 class HbaClassifier:
@@ -316,14 +388,19 @@ class HbaClassifier:
       dist = hit[0]
       lateral = hit[1] - np.interp(dist, center[:, 0], center[:, 1])
       angle = np.degrees(np.arctan2(lateral, dist))
-    return (t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle)
+    return (t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post)
 
   def _classify(self, tr: Track, v_ego):
     p = self.p
     h = np.array([x[:6] for x in tr.hist], dtype=float)
     tr.dist, tr.lateral = h[-1, 3], h[-1, 4]
     red = tr.red_frac > 0.5
-    angles = np.array([x[8] for x in tr.hist[-5:]], dtype=float)
+    recent = tr.hist[-5:]
+    if not tr.strong(p) and sum(x[10] for x in recent) * 2 > len(recent):
+      tr.obj_speed = float("nan")
+      tr.kind = KIND_STATIC  # delineator post
+      return
+    angles = np.array([x[8] for x in recent], dtype=float)
     big_white = not red and tr.hist[-1][5] >= p.strong_area  # real headlights pointing at the road (driveway exit)
     if not big_white and np.isfinite(angles).any() and p.oncoming_side * np.nanmedian(angles) < -p.roadside_angle_deg:
       tr.obj_speed = float("nan")
@@ -348,7 +425,8 @@ class HbaClassifier:
       tr.obj_speed = float("nan")
       tr.kind = KIND_PRECEDING if red else KIND_CANDIDATE
 
-  def update(self, t, bgr, model, rpy_calib, height, v_ego, dark=True, valid=True) -> HbaOut:
+  def update(self, t, frame, model, rpy_calib, height, v_ego, dark=True, valid=True) -> HbaOut:
+    """frame: the narrow-camera image, BGR array or Nv12Frame."""
     p, out = self.p, HbaOut()
     if not valid or model is None or rpy_calib is None:
       self._reset()
@@ -357,7 +435,7 @@ class HbaClassifier:
     geom = Geometry(rpy_calib, height)
     center = road_centerline(model, p)
     mask = corridor_mask(geom, center, p)
-    blobs = find_blobs(bgr, mask, p)
+    blobs = find_blobs(frame, mask, p)
     self.last_mask, self.last_blobs, self.last_center, self.last_geom = mask, blobs, center, geom
     self._associate(t, blobs, geom, center)
     for tr in self.tracks:

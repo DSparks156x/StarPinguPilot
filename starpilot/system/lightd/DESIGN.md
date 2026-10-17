@@ -269,9 +269,14 @@ carState, starpilotCarState ───┘                       (freshness + mode
   `frameId` advances, and the estimator drops anything older than 200 ms.
 - **Clock:** the camera messages' own `logMonoTime`.
 - **Sun:** live GPS, falling back to `LastGPSPosition` up to a week old, plus the wall clock once `system_time_valid()`.
-- **HBA:** runs at ~10 Hz on the newest narrow VisionIPC frame (NV12→BGR, then the corridor crop).
+- **HBA:** runs on its own thread (`HbaWorker`) at up to ~10 Hz on the newest narrow VisionIPC frame. The loop hands it
+  the newest context and reads the newest result without waiting, so a slow HBA never slows the low beam.
+  - The frame stays NV12. Only the corridor's bounding box is converted, thresholded and labelled, and the corridor
+    dilation only touches that box. OpenCV runs on one thread.
+  - Message `valid` is alive + valid of the poll camera. Its average-rate check is ignored, because it measured this
+    loop: at 100 ms per inline HBA frame the loop fell to ~9 Hz, `valid` went false, and card dropped the low beam too.
   - It runs in mode 1 (shadow) and mode 3. It needs `calStatus == calibrated`, `modelV2` within 5 frames of the image, and `carState` alive.
-  - `hbaValid` drops 0.3 s after the last processed frame.
+  - `hbaValid` drops 0.3 s after the last processed frame, or at once if the worker thread died.
 - **Process:** `PythonProcess("lightd", ..., run_lightd, nice=10)`. It runs onroad when `volkswagen_lightd_mode >= 1`,
   and that toggle is only non-zero on PQ cars.
 
