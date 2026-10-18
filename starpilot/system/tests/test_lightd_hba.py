@@ -2,10 +2,11 @@ import cv2
 import numpy as np
 import pytest
 
-from openpilot.starpilot.system.lightd.hba import (FCAM_H, FCAM_W, Geometry, HbaClassifier, Nv12Frame, REASON_DELAY,
-                                                    REASON_FAULT, REASON_ONCOMING, REASON_SPEED, REASON_TOWN, corridor_mask,
-                                                    find_blobs, HbaParams, KIND_STATIC, road_centerline, rot_from_euler,
-                                                    rotate_pixel)
+from openpilot.starpilot.system.lightd.hba import (ECAM_H, ECAM_W, FCAM_H, FCAM_W, Geometry, HbaClassifier, Nv12Frame,
+                                                    REASON_DELAY, REASON_FAULT, REASON_ONCOMING, REASON_SPEED, REASON_TOWN,
+                                                    corridor_mask, find_blobs, HbaParams, KIND_STATIC, road_centerline,
+                                                    rot_from_euler, rotate_pixel, wide_lights, wide_params)
+from openpilot.starpilot.system.lightd.hba import _geomspace, _slopes, candidate_ymin, colour_masks, median, town_lights, union_box
 
 HEIGHT = 1.22
 STRAIGHT = {
@@ -24,25 +25,29 @@ def dark_frame():
   return np.full((FCAM_H, FCAM_W, 3), 12, np.uint8)
 
 
-def frame_with_light(geom, x, y, z_above_road, radius=3, color=(255, 255, 255)):
-  img = dark_frame()
-  uv, ok = geom.project(np.array([[x, y, HEIGHT - z_above_road]]))
-  assert ok[0]
-  u, v = (int(round(c)) for c in uv[0])
+def draw_lamp(img, u, v, radius=3, color=(255, 255, 255), glow=True):
+  """A lamp blooms on the sensor: a dim halo around the core. A retroreflector lit by our beams doesn't (glow=False)."""
+  if glow:
+    g = 3 * radius + 2
+    img[max(0, v - g):v + g + 1, max(0, u - g):u + g + 1] = np.maximum(
+      img[max(0, v - g):v + g + 1, max(0, u - g):u + g + 1], (np.array(color) * 0.4).astype(np.uint8))
   img[v - radius:v + radius + 1, u - radius:u + radius + 1] = color
   return img
+
+
+def frame_with_light(geom, x, y, z_above_road, radius=3, color=(255, 255, 255), glow=True):
+  return add_light(dark_frame(), geom, x, y, z_above_road, radius, color, glow)
 
 
 def run(clf, frames, v=FAST, t0=0.0, model=STRAIGHT, dt=DT, **kw):
   return [clf.update(t0 + i * dt, f, model, [0.0, 0.0, 0.0], HEIGHT, v, **kw) for i, f in enumerate(frames)]
 
 
-def add_light(img, geom, x, y, z_above_road, radius=3, color=(255, 255, 255)):
+def add_light(img, geom, x, y, z_above_road, radius=3, color=(255, 255, 255), glow=True):
   uv, ok = geom.project(np.array([[x, y, HEIGHT - z_above_road]]))
   assert ok[0]
   u, v = (int(round(c)) for c in uv[0])
-  img[v - radius:v + radius + 1, u - radius:u + radius + 1] = color
-  return img
+  return draw_lamp(img, u, v, radius, color, glow)
 
 
 def test_rot_from_euler_is_zyx():
@@ -64,7 +69,7 @@ def test_projection_and_ground_ray_roundtrip():
 def test_finds_white_and_red_but_not_amber():
   mask = np.full((FCAM_H, FCAM_W), 255, np.uint8)
   img = dark_frame()
-  img[300:304, 300:304] = (255, 255, 255)        # headlight
+  draw_lamp(img, 301, 301, 2)                     # headlight
   img[300:304, 500:504] = (20, 20, 255)          # taillight halo (BGR)...
   img[301:303, 501:503] = (220, 220, 255)        # ...with a bright core
   img[300:304, 700:704] = (0, 200, 255)          # amber reflector / yellow sign
@@ -89,7 +94,11 @@ def test_corridor_mask_matches_full_frame_dilation(rpy):
   mask = corridor_mask(geom, road_centerline(STRAIGHT, p, HEIGHT), p)
   undilated = corridor_mask(geom, road_centerline(STRAIGHT, p, HEIGHT), HbaParams(margin_px=0))
   k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * p.margin_px + 1, 2 * p.margin_px + 1))
-  assert undilated.any() and np.array_equal(mask, cv2.dilate(undilated, k))
+  dilated = cv2.dilate(undilated, k)
+  # the outline trick matches a disc dilation to within the line rasterisation: a pixel or two along the edges
+  assert undilated.any() and np.all(mask[undilated > 0] > 0)
+  diff = np.count_nonzero(mask != dilated)
+  assert diff < 0.03 * np.count_nonzero(dilated), diff
 
 
 def test_dark_empty_road_restores_high_beam_after_clear_time():
@@ -176,17 +185,17 @@ def test_lit_yellow_signs_are_not_lamps():
   img = dark_frame()
   img[300:312, 300:312] = (0, 230, 255)   # yellow sign, bright enough in luma to pass the white test
   img[304:308, 304:308] = 255             # ...with an overexposed middle
-  img[300:304, 500:504] = 255             # a headlight
+  draw_lamp(img, 501, 301, 2)             # a headlight
   blobs = find_blobs(img, mask, HbaParams())
   assert len(blobs) == 1 and abs(blobs[0].u - 501.5) < 1
 
 
-def _pair_frames(geom, n, radius, value):
+def _pair_frames(geom, n, radius, value, glow=True):
   frames = []
   for _ in range(n):
     img = dark_frame()
     for y in (-3.0, -4.5):
-      add_light(img, geom, 120.0, y, 0.7, radius=radius, color=(value, value, value))
+      add_light(img, geom, 120.0, y, 0.7, radius=radius, color=(value, value, value), glow=glow)
     frames.append(img)
   return frames
 
@@ -199,11 +208,11 @@ def test_lights_that_follow_our_high_beam_are_reflectors(reflector):
   outs = run(clf, _pair_frames(geom, 30, 1, 235), high_beam_on=False)
   assert not outs[-1].high_beam_permitted and outs[-1].reason & REASON_ONCOMING
   # our high beam comes on (driver or J519): a reflector lights up, a lamp doesn't care
-  after = _pair_frames(geom, 100, 2 if reflector else 1, 255 if reflector else 235)
+  after = _pair_frames(geom, 100, 2 if reflector else 1, 255 if reflector else 235, glow=not reflector)
   outs = run(clf, after, t0=1.5, high_beam_on=True)
   kinds = {tr.kind for tr in clf.tracks if tr.missed == 0}
   if reflector:
-    assert kinds == {KIND_STATIC} and outs[-1].high_beam_permitted
+    assert kinds <= {KIND_STATIC} and outs[-1].high_beam_permitted
   else:
     assert KIND_STATIC not in kinds and not any(o.high_beam_permitted for o in outs)
 
@@ -293,3 +302,270 @@ def test_posted_limit_is_town(limit, town):
   clf = HbaClassifier()
   outs = run(clf, [dark_frame()] * int(3.0 / DT), speed_limit=limit)
   assert bool(outs[-1].reason & REASON_TOWN) == town and outs[-1].high_beam_permitted != town
+
+
+def test_crisp_white_blobs_are_signs_not_lamps():
+  # route 46: white signs and post reflectors have a dark surround (median V 13-24), headlights bloom (41-128)
+  mask = np.full((FCAM_H, FCAM_W), 255, np.uint8)
+  img = dark_frame()
+  draw_lamp(img, 300, 300, 4, glow=False)   # speed limit sign lit by our beams
+  draw_lamp(img, 600, 300, 4)               # headlight
+  draw_lamp(img, 900, 300, 1, glow=False)   # small and far: too small to judge, kept
+  blobs = sorted(find_blobs(img, mask, HbaParams()), key=lambda b: b.u)
+  assert [round(b.u) for b in blobs] == [600, 900]
+
+
+WIDE_EULER = [0.0, 0.0, 0.0]
+NEUTRAL = (128, 128)
+YELLOW = (60, 170)  # NV12 (U, V) of a lit yellow sign
+
+
+def dark_wide():
+  return Nv12Frame(np.full((ECAM_H, ECAM_W), 16, np.uint8), np.full((ECAM_H // 2, ECAM_W), 128, np.uint8))
+
+
+def wide_lamp(frame, x, y, z_above_road=0.7, radius=4, glow=True, uv=NEUTRAL):
+  """A light at (x, y) m drawn into a wide NV12 frame: a saturated core, a dim bloom around it if glow."""
+  g = Geometry([0.0, 0.0, 0.0], HEIGHT, WIDE_EULER)
+  pt, ok = g.project(np.array([[x, y, HEIGHT - z_above_road]]))
+  assert ok[0]
+  u, v = (int(round(c)) for c in pt[0])
+  if glow:
+    b = 3 * radius + 2
+    frame.y[v - b:v + b + 1, u - b:u + b + 1] = 90
+  frame.y[v - radius:v + radius + 1, u - radius:u + radius + 1] = 240
+  frame.uv[(v - radius) // 2:(v + radius) // 2 + 1, (u - radius) & ~1:(u + radius + 2) & ~1] = np.tile(uv, radius + 1)
+  return frame, (u, v)
+
+
+def look_wide(frame):
+  p = HbaParams()
+  wp = wide_params(p)
+  return wide_lights(frame, Geometry([0.0, 0.0, 0.0], HEIGHT, WIDE_EULER), road_centerline(STRAIGHT, wp, HEIGHT), wp,
+                     Geometry([0.0, 0.0, 0.0], HEIGHT))
+
+
+def test_wide_geometry_sees_past_the_narrow_view():
+  narrow, wide = Geometry([0.0, 0.0, 0.0], HEIGHT), Geometry([0.0, 0.0, 0.0], HEIGHT, WIDE_EULER)
+  ahead = np.array([[100.0, 0.0, 0.0]])
+  assert np.allclose(wide.project(ahead)[0], [[ECAM_W / 2, ECAM_H / 2]])
+  # 37 degrees to the left, 8 m out: past the narrow camera's edge, well inside the wide one
+  side = np.array([[8.0, -6.0, HEIGHT - 0.7]])
+  (un, _), = narrow.project(side)[0]
+  (uw, vw), = wide.project(side)[0]
+  assert un < 0 and 0 < uw < ECAM_W / 2 and ECAM_H / 2 < vw < ECAM_H
+  # the device-to-wide rotation is applied: yawing the wide camera moves the point in its image
+  yawed = Geometry([0.0, 0.0, 0.0], HEIGHT, [0.0, 0.0, 0.05])
+  assert abs(yawed.project(side)[0][0, 0] - uw) > 10
+  # the strided projection is the full one scaled
+  assert np.allclose(wide.strided(2).project(side)[0], wide.project(side)[0] / 2)
+
+
+def test_wide_guard_finds_blooming_lamps_left_of_the_narrow_view():
+  frame, (u, v) = wide_lamp(dark_wide(), 8.0, -6.0)
+  lights = look_wide(frame)
+  assert len(lights) == 1 and lights[0].lamp
+  assert abs(lights[0].u - u) <= 2 and abs(lights[0].v - v) <= 2
+
+
+@pytest.mark.parametrize("x, y, kw", [
+  (8.0, -6.0, {"glow": False}),       # a sign or reflector lit by our beams: crisp edges
+  (8.0, -6.0, {"uv": YELLOW}),        # a lit yellow sign
+  (8.0, -6.0, {"radius": 1}),         # too small to be sure
+  (6.5, -6.5, {"radius": 8}),         # a car passing beside us: our beam doesn't reach its driver
+])
+def test_wide_guard_ignores_signs_and_small_lights(x, y, kw):
+  assert not any(w.lamp for w in look_wide(wide_lamp(dark_wide(), x, y, **kw)[0]))
+
+
+@pytest.mark.parametrize("x, y", [
+  (60.0, -3.6),   # well inside the narrow view: that pipeline knows better
+  (8.0, 6.0),     # on our side of the path: parked cars, reflectors, driveways
+  (8.0, -12.0),   # beyond the oncoming lane
+])
+def test_wide_guard_looks_only_outside_the_narrow_view_on_the_oncoming_side(x, y):
+  assert look_wide(wide_lamp(dark_wide(), x, y)[0]) == []
+
+
+def test_wide_lamp_dips_at_once_and_holds_between_looks():
+  clf = HbaClassifier()
+  outs = run(clf, [dark_frame()] * 60)
+  assert outs[-1].high_beam_permitted
+  car = wide_lamp(dark_wide(), 8.0, -6.0)[0]
+  # the narrow frame is empty; the wide guard looks every fourth frame (0.2 s)
+  outs = [clf.update(3.0 + i * DT, dark_frame(), STRAIGHT, [0.0, 0.0, 0.0], HEIGHT, FAST,
+                     **({"wide": car, "wide_euler": WIDE_EULER} if i % 4 == 0 else {})) for i in range(8)]
+  assert not outs[0].high_beam_permitted and outs[0].reason & REASON_ONCOMING and outs[0].n_wide == 1
+  assert all(o.threat and not o.high_beam_permitted for o in outs)
+  # it's gone: the hit holds wide_hold_s, then the usual clear time
+  after = [clf.update(3.4 + i * DT, dark_frame(), STRAIGHT, [0.0, 0.0, 0.0], HEIGHT, FAST,
+                      **({"wide": dark_wide(), "wide_euler": WIDE_EULER} if i % 4 == 0 else {})) for i in range(60)]
+  clear = next(i for i, o in enumerate(after) if not o.threat)
+  assert clear * DT <= clf.p.wide_hold_s + DT
+  assert not after[clear].high_beam_permitted and after[-1].high_beam_permitted
+
+
+def test_wide_guard_needs_its_calibration_and_the_dark():
+  car = wide_lamp(dark_wide(), 8.0, -6.0)[0]
+  for kw in ({"wide": car}, {"wide": car, "wide_euler": WIDE_EULER, "dark": False}):
+    clf = HbaClassifier()
+    run(clf, [dark_frame()] * 60)
+    out = clf.update(3.0, dark_frame(), STRAIGHT, [0.0, 0.0, 0.0], HEIGHT, FAST, **kw)
+    assert not out.threat and out.n_wide == 0
+
+
+# --- the CPU shortcuts: same results as the plain computations they replace ---
+
+CURVE = {**STRAIGHT,
+         "lanes": [np.column_stack([np.linspace(0, 190, 33), y + 4e-4 * np.linspace(0, 190, 33) ** 2,
+                                    np.full(33, HEIGHT) - 0.01 * np.linspace(0, 190, 33)]) for y in (-5.4, -1.8, 1.8, 5.4)]}
+
+
+def corridor_mask_reference(geom, center, p, far_extra=0.0, lateral=None):
+  """corridor_mask as it was before vectorizing: one piece at a time."""
+  mask = np.zeros((geom.h, geom.w), np.uint8)
+  far_side = p.far_side_width + far_extra
+  left = p.ego_half_width + (p.oncoming_width if p.oncoming_side < 0 else far_side)
+  right = p.ego_half_width + (p.oncoming_width if p.oncoming_side > 0 else far_side)
+  if lateral is not None:
+    left, right = lateral
+  corners = []
+  for x, y, z, beyond in center:
+    wl, wz = p.beyond_lateral * beyond, p.beyond_vertical * beyond
+    corners.append([(x, y - left - wl, z - p.lamp_low + wz), (x, y + right + wl, z - p.lamp_low + wz),
+                    (x, y - left - wl, z - p.lamp_high - wz), (x, y + right + wl, z - p.lamp_high - wz)])
+  corners = np.array(corners)
+  uv, valid = geom.project(corners.reshape(-1, 3))
+  uv, valid = uv.reshape(-1, 4, 2), valid.reshape(-1, 4)
+  for i in range(len(corners) - 1):
+    if not (valid[i].all() and valid[i + 1].all()):
+      continue
+    poly = np.concatenate([uv[i], uv[i + 1]])
+    if np.abs(poly).max() > 1e5:
+      continue
+    hull = cv2.convexHull(poly.astype(np.float32)).astype(np.int32)
+    cv2.fillConvexPoly(mask, hull, 255)
+    if p.margin_px > 0:
+      cv2.polylines(mask, [hull], True, 255, thickness=2 * p.margin_px + 1, lineType=cv2.LINE_8)
+  return mask
+
+
+@pytest.mark.parametrize("model", [STRAIGHT, CURVE])
+@pytest.mark.parametrize("rpy", [[0.0, 0.0, 0.0], [0.02, -0.04, -0.03], [0.0, 0.3, 0.0]])
+def test_corridor_mask_matches_reference_and_its_box(model, rpy):
+  p = HbaParams()
+  center = road_centerline(model, p, HEIGHT)
+  narrow = Geometry(rpy, HEIGHT)
+  wp = wide_params(p)
+  cases = [(narrow, center, p, {}), (narrow, center, p, {"far_extra": p.adjacent_lane_width}),
+           (narrow, center, HbaParams(margin_px=0), {}),
+           (Geometry(rpy, HEIGHT, WIDE_EULER).strided(2), road_centerline(model, wp, HEIGHT), wp, {"lateral": (7.5, 0.0)})]
+  for geom, c, q, kw in cases:
+    ref = corridor_mask_reference(geom, c, q, **kw)
+    mask, box = corridor_mask(geom, c, q, with_box=True, **kw)
+    assert np.array_equal(mask, ref) and np.array_equal(corridor_mask(geom, c, q, **kw), ref)
+    assert tuple(box) == tuple(cv2.boundingRect(ref))
+
+
+def test_union_box():
+  assert union_box((0, 0, 0, 0), (3, 4, 5, 6)) == (3, 4, 5, 6)
+  assert union_box((3, 4, 5, 6), (0, 0, 0, 0)) == (3, 4, 5, 6)
+  a, b = np.zeros((50, 60), np.uint8), np.zeros((50, 60), np.uint8)
+  a[5:9, 40:44], b[20:30, 3:7] = 255, 255
+  assert union_box(cv2.boundingRect(a), cv2.boundingRect(b)) == cv2.boundingRect(a | b)
+
+
+def test_median_matches_numpy():
+  rng = np.random.default_rng(1)
+  for n in (1, 2, 3, 4, 7, 10, 51):
+    for a in (rng.integers(0, 256, n).astype(np.uint8), np.full(n, 255, np.uint8), rng.integers(-300, 300, n).astype(np.int16),
+              rng.normal(size=n), rng.integers(0, 256, (n, 3)).astype(np.uint8)[:, 1], list(rng.normal(size=n))):
+      assert median(a) == np.median(a)
+    angles = rng.normal(size=n)
+    angles[::3] = np.nan
+    if np.isfinite(angles).any():
+      assert median(angles[np.isfinite(angles)]) == np.nanmedian(angles)
+  assert np.isnan(median(np.zeros(0)))
+
+
+def test_road_centerline_helpers_match_numpy():
+  for args in ((15.0, np.float32(192.0), 24), (np.float32(197.0), 600.0, 10), (15.0, 16.0, 24), (6.0, 300.0, 200)):
+    for _ in range(2):  # memoized the second time
+      r = _geomspace(*args)
+      assert r.dtype == np.geomspace(*args).dtype and np.array_equal(r, np.geomspace(*args))
+  rng = np.random.default_rng(2)
+  for dtype in (np.float32, np.float64):
+    tail = np.column_stack([np.linspace(120, 192, 6), rng.normal(0, 3, 6), rng.normal(1.2, 0.5, 6)]).astype(dtype)
+    sy, sz = _slopes(tail)
+    assert sy == pytest.approx(np.polyfit(tail[:, 0], tail[:, 1], 1)[0], rel=1e-9, abs=1e-12)
+    assert sz == pytest.approx(np.polyfit(tail[:, 0], tail[:, 2], 1)[0], rel=1e-9, abs=1e-12)
+
+
+def test_candidate_table_covers_every_passing_pixel():
+  """Every (Y, U, V) whose pixel passes the white or red test is at or above the table's Y for its chroma pair."""
+  p = HbaParams()
+  table = candidate_ymin(p).reshape(256, 256)  # [V, U]
+  uv = np.empty((256, 512), np.uint8)
+  uv[:, 0::2], uv[:, 1::2] = np.arange(256, dtype=np.uint8)[None, :], np.arange(256, dtype=np.uint8)[:, None]
+  for y in range(256):
+    bgr = cv2.cvtColor(np.concatenate([np.full((512, 512), y, np.uint8), uv]), cv2.COLOR_YUV2BGR_NV12)[::2, ::2]
+    white, red = colour_masks(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV), p)
+    assert np.all(table[(white > 0) | (red > 0)] <= y), y
+  # and it is selective: a dark or neutral block never is a candidate
+  assert table[128, 128] >= 190 and np.mean(table > 60) > 0.75
+
+
+def nv12_scene(seed, n):
+  """A dark frame with n lights (lamps, reflectors, taillights, yellow signs) and sensor noise, as NV12."""
+  rng = np.random.default_rng(seed)
+  bgr = np.clip(rng.normal(14, 4, (FCAM_H, FCAM_W, 3)), 0, 255).astype(np.uint8)
+  for _ in range(n):
+    u, v, r, kind = int(rng.integers(150, FCAM_W - 150)), int(rng.integers(330, 430)), int(rng.integers(1, 6)), rng.integers(4)
+    if kind == 0:
+      draw_lamp(bgr, u, v, r)
+    elif kind == 1:
+      draw_lamp(bgr, u, v, r, glow=False)
+    elif kind == 2:  # taillight: red halo, near-white core
+      bgr[v - r - 2:v + r + 3, u - r - 2:u + r + 3] = (30, 30, 230)
+      bgr[v - r // 2:v + r // 2 + 1, u - r // 2:u + r // 2 + 1] = (200, 200, 255)
+    else:
+      bgr[v - 2 * r:v + 2 * r, u - 2 * r:u + 2 * r] = (0, 200, 255)
+  i420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
+  h, w = FCAM_H, FCAM_W
+  uv = np.empty((h // 2, w), np.uint8)
+  uv[:, 0::2] = i420[h:h + h // 4].reshape(h // 2, w // 2)
+  uv[:, 1::2] = i420[h + h // 4:].reshape(h // 2, w // 2)
+  return Nv12Frame(i420[:h], uv), cv2.cvtColor(np.concatenate([i420[:h], uv]), cv2.COLOR_YUV2BGR_NV12)
+
+
+@pytest.mark.parametrize("seed,n", [(0, 12), (1, 12), (2, 25), (3, 80)])
+def test_nv12_blobs_match_full_conversion(seed, n):
+  """Converting only around the candidate pixels finds the same blobs, in the same order, as converting it all."""
+  p = HbaParams()
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  center = road_centerline(STRAIGHT, p, HEIGHT)
+  mask, box = corridor_mask(geom, center, p, with_box=True)
+  red_mask, red_box = corridor_mask(geom, center, p, p.adjacent_lane_width, with_box=True)
+  frame, bgr = nv12_scene(seed, n)
+  for rm, b in ((None, box), (red_mask, union_box(box, red_box))):
+    ref = find_blobs(bgr, mask, p, rm)
+    assert len(ref) > 0
+    assert find_blobs(frame, mask, p, rm) == ref
+    assert find_blobs(frame, mask, p, rm, b) == ref
+
+
+def test_town_lights_box_and_pooling():
+  rng = np.random.default_rng(4)
+  band = rng.integers(0, 256, (200, 1344)).astype(np.uint8)
+  pooled = cv2.resize(cv2.threshold(band, 179, 255, cv2.THRESH_BINARY)[1], (672, 100), interpolation=cv2.INTER_AREA) > 0
+  maxpool = np.maximum(np.maximum(band[0::2, 0::2], band[1::2, 0::2]), np.maximum(band[0::2, 1::2], band[1::2, 1::2])) >= 180
+  assert np.array_equal(pooled, maxpool)
+  p = HbaParams()
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  center = road_centerline(STRAIGHT, p, HEIGHT)
+  mask, box = corridor_mask(geom, center, p, with_box=True)
+  img = dark_frame()
+  for u, v in rng.integers((20, 20), (FCAM_W - 20, 330), (40, 2)):
+    draw_lamp(img, int(u), int(v), int(rng.integers(1, 4)), color=(240, 240, 240))
+  n = town_lights(img, geom, center, mask, p)
+  assert n > 10 and town_lights(img, geom, center, mask, p, box) == n

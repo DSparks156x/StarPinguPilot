@@ -6,7 +6,7 @@ import numpy as np
 import cereal.messaging as messaging
 from cereal import log
 from openpilot.starpilot.system.lightd import lightd as L
-from openpilot.starpilot.system.lightd.hba import FCAM_H, FCAM_W, Nv12Frame
+from openpilot.starpilot.system.lightd.hba import ECAM_H, ECAM_W, FCAM_H, FCAM_W, Nv12Frame
 
 DT = 0.05
 GPS = "gpsLocation"
@@ -23,9 +23,10 @@ class NoParams:
 class FakeCameraRunner(L.HbaRunner):
   """The real runner and classifier on a dark synthetic frame instead of VisionIPC. `hang` stalls the classifier."""
 
-  def __init__(self):
-    super().__init__()
+  def __init__(self, wide=True):
+    super().__init__(wide)
     self.frame_id = 0
+    self.wide_calls = 0
     self.hang = threading.Event()
     self.release = threading.Event()
     self.calls = 0
@@ -43,6 +44,10 @@ class FakeCameraRunner(L.HbaRunner):
 
   def _latest_frame(self):
     return Nv12Frame(np.full((FCAM_H, FCAM_W), 16, np.uint8), np.full((FCAM_H // 2, FCAM_W), 128, np.uint8)), self.frame_id
+
+  def _latest_wide(self):
+    self.wide_calls += 1
+    return Nv12Frame(np.full((ECAM_H, ECAM_W), 16, np.uint8), np.full((ECAM_H // 2, ECAM_W), 128, np.uint8)), self.frame_id
 
 
 def new(svc, t):
@@ -68,6 +73,7 @@ def inputs(t, frame_id):
   m.liveCalibration.calStatus = log.LiveCalibrationData.Status.calibrated
   m.liveCalibration.rpyCalib = [0.0, 0.0, 0.0]
   m.liveCalibration.height = [1.22]
+  m.liveCalibration.wideFromDeviceEuler = [0.0, 0.0, 0.0]
   msgs.append(m)
   m = new("modelV2", t)
   md = m.modelV2
@@ -163,3 +169,24 @@ def test_message_validity_ignores_loop_rate():
   # a camera that stops is still caught
   sm.update_msgs(40 * 0.125 + 1.0, [])
   assert not sm.all_checks([ld.poll])
+
+
+def test_wide_guard_looks_at_its_own_rate_in_the_dark():
+  for wide, dark, looks in ((True, True, 10), (False, True, 0), (True, False, 0)):
+    runner = FakeCameraRunner(wide)
+    passed = []
+    update = runner.clf.update
+    runner.clf.update = lambda *a, **kw: (passed.append(kw["wide"] is not None and kw["wide_euler"] is not None), update(*a, **kw))[1]
+    for i in range(20):
+      t = i * 0.11  # every call is due for the HBA, every other one for the wide guard
+      runner.frame_id += 1
+      msgs = inputs(t, runner.frame_id)
+      res = runner.update(L.HbaContext(t, dark, msgs[4].liveCalibration, msgs[5].modelV2, True, True, 25.0))
+      assert res is not None and res.out.valid
+    assert len(passed) == 20 and sum(passed) == looks and runner.wide_calls == looks
+    assert passed[0] == (looks > 0) and passed[1] is False
+
+
+def test_disable_wide_road_turns_the_wide_guard_off():
+  assert L.LightD(True, GPS, L.SolarTracker(NoParams())).hba.runner.use_wide is False
+  assert L.LightD(False, GPS, L.SolarTracker(NoParams())).hba.runner.use_wide is True

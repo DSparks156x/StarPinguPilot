@@ -273,9 +273,9 @@ JPEGs at every dip/restore, every `--jpg` s or `--at seg:t0-t1`. `--labels` scor
   motion, a strong lamp pair). Single frames flip between rules, and each flip to a threat was a dip.
 - Restore backoff: a restore cut short within 3 s by weak evidence doubles the clear time (2 → 4 → 8 s). It resets after 10 s
   permitted. A model lead, a strong lamp or oncoming motion doesn't count.
-- Gyro (`livePose.angularVelocityDevice`): tracks are predicted through the rotation since the last frame, and the projection uses
-  calibration minus the high-passed (1.5 s) rotation, so bumps don't move the corridor or the ranges. The sign was checked on c9:
-  median prediction error 4.0 px with it, 4.8 px without, 6.8 px flipped; the share of near lights at |speed| < 4 m/s went 14 → 22 %.
+- Gyro (`livePose.angularVelocityDevice`): tracks are predicted through the rotation since the last frame. The sign was checked
+  on c9: median prediction error 4.0 px with it, 4.8 px without, 6.8 px flipped. (This pass also rotated the projection by a
+  high-passed gyro integral. That was wrong and is gone, see the first drive below.)
 - High-beam feedback (`starpilotCarState.highBeamOn`): a track whose brightness rises ≥ 1.8× within 0.15–0.6 s of our high beam
   switching on (or falls as much after it switches off) is a retroreflector for good. So is an unpaired light that first appears
   within 0.4 s after switching on. Untested on real data: none of the logs has the high beam on.
@@ -308,7 +308,7 @@ Known gaps and next steps:
 - Track vehicles as lamp pairs rather than single lamps, then a learned per-track score (GBDT on the CSV features) once there are
   enough labels.
 - Town gate: see below.
-- The wide camera isn't used yet.
+- The wide camera only feeds a glare guard for curves (see "Wide-camera glare guard" below).
 - Fog/backscatter needs data with the high beam on.
 
 ### Town gate (2026-10-17)
@@ -346,6 +346,96 @@ Known gaps:
 - An unlit village doesn't register at all, which is why the mapd cue matters.
 - The thresholds rest on one town and three residential drives.
 
+### First drive (2026-10-17, route `00000046`, 34 min at night, mode 3)
+
+HBA worked but flashed several oncoming cars at close range, mostly in turns, and stayed low for reflective signs.
+Video + rlogs are in `carstuff/logs/00000046--c6859cdf72` (flat layout for `replay_hba.py`).
+
+**`starpilotLightState` wasn't logged at all.** `cereal/services.h` is generated but committed, and it was stale (no
+`starpilotLightState`), so loggerd skipped it. Regenerated; `starpilot/system/tests/test_services_h.py` now fails if it drifts.
+Until the device rebuilds loggerd, the drive can only be read from what we sent (0x65A in `sendcan`) and `GK1_Fernlicht`.
+
+**Turns: the corridor was swung off the road.** The second pass subtracted a high-passed (1.5 s) integral of the gyro from
+the calibration before projecting. On a bump that's a short pitch blip, but in a sustained turn the yaw integral settles at
+yaw rate × 1.5 s, about 13° at 0.15 rad/s, and the corridor slid to the outside of the curve, away from oncoming cars. The model's
+road is already in the current frame's calibrated coordinates, so there is nothing to correct. The gyro now only predicts tracks.
+
+**Halogen headlights were dropped as yellow signs.** The "saturated yellow around a white blob" sign test (second pass) also
+matches the warm halo of a halogen lamp (yellow ≈ 1.7× the core's area). For white blobs it now needs 4× (`sign_frac_white`).
+
+**Lamps bloom, retroreflectors don't.** Lit white signs, route markers and post reflectors have cores as neutral as headlights
+(saturation 14–86), so colour can't split them. Their surroundings can: the median V of a blob-sized ring around the core is
+13–24 for signs and reflectors on route 46 and 41–128 for headlights. White blobs of 16 px or more with a ring median under 32
+are dropped (`crisp_ring_v`). Smaller (far) blobs overlap, so they're left alone.
+
+**A big white lamp on the oncoming side is a car.** Motion and votes misjudged close oncoming lamps (two lamps swapping, wet-road
+reflections) as static. A strong, unpaired-or-paired, non-post white track no more than 1° to our side of the path can't be
+static any more (`why = "glare"`). The "born right after our high beam came on" reflector rule skips strong blobs.
+
+**Measuring glare without labels.** `replay_hba.py` now records the biggest blob per frame that is saturated, near-neutral, blooms
+(ring median ≥ 40) and sits in the left two thirds of the band, ignoring the classifier ("obvious lamp", ≥ 60 px). It's a
+crude stand-in for "an oncoming car is right there"; time with the high beam permitted while one is in view is the glare number.
+
+| route 46 segs 9–21 (13 min, replay) | as driven | now |
+|---|---|---|
+| high beam permitted while an obvious lamp is in view | 7.0 s of 50 s | 0.8 s |
+| high beam permitted | 36.8 % | 41.1 % |
+| dips per minute | 4.2 | 3.3 |
+
+| c9 hand labels | second pass | now |
+|---|---|---|
+| vehicle present: threat / glare | 95.9 % / 0.0 % | 96.0 % / 0.0 % |
+| nothing present: threat / permitted | 20.4 % / 42.1 % | 14.4 % / 45.9 % |
+
+What's left of the 0.8 s is the first frame a car appears, plus one 0.3 s case of a car entering at the edge of the road camera
+in a tight curve. The wide camera (115°) sees those earlier; it's the next step for turns. Most remaining long dips at speed are
+taillights 150–300 m ahead, which is correct.
+
+### Wide-camera glare guard (2026-10-17)
+
+In a tight curve an oncoming car is outside the narrow camera (61° across), or cut by its edge, until it is close. On
+route 46 seg 14 the wide camera has the car at 25.3 s, 2.5 s before it reaches the narrow view's left edge. The guard
+(`wide_lights()`, `HbaClassifier._wide_update()`) has no tracks or motion. Every `WIDE_PERIOD_S` (0.2 s), in the dark, it
+looks at the newest wide frame (`VISION_STREAM_WIDE_ROAD`, within 2 frames of the narrow one), and any hit dips at once
+with `REASON_ONCOMING`:
+- **Geometry:** `liveCalibration.wideFromDeviceEuler` on top of `rpyCalib`, with the wide intrinsics treated as a pinhole
+  like openpilot does (1344×760, f = 567 × 3/4).
+- **Where:** a corridor from the lane centre 7.5 m towards oncoming traffic, 6–300 m out, at lamp height, minus the narrow
+  view inset by 40 px. Inside the narrow view the narrow pipeline knows better: it has 2.7× the resolution, tracks and motion.
+- **What:** Y every other row and column (the strided mask is projected directly, so nothing is computed at full
+  resolution). A light counts if it has Y ≥ 225, at least 6 strided px, chroma |U−128|+|V−128| ≤ 40, h/w ≤ 2.5, and blooms:
+  the ring median Y is ≥ 32, the same test as `crisp_ring_v`.
+- **Reach ≥ 10 m:** the farthest distance at which its ray is at lamp height inside that band must be at least 10 m.
+  Close by, the corridor's lamp band reaches up to the horizon row, where a yard light 200 m off to the side sits too.
+  Those, and cars already passing beside us (our beam doesn't reach their driver), have a reach of 7–10 m. Cars in curves
+  have 12–18 m (the model's road stops short of where they are).
+- **Hold:** a hit holds the threat for 0.3 s, so the 10 Hz decision doesn't flicker between looks.
+
+Replay: `replay_hba.py` decodes `ecamera--N.hevc` alongside the narrow video and checks it against `wideRoadEncodeIdx`.
+It writes every light the guard looked at, with its tests, to `<out>_wide.csv`, and saves a JPEG with the wide frame
+alongside at every onset (`_wide`). `--no-wide` replays without the guard.
+
+Cost: 0.85 ms per look on desktop (p95 1.2 ms, seg 14 and 20), 3.0 ms on the device's A55, five times a second. `DisableWideRoad` turns it off, and
+so does a missing `wideFromDeviceEuler`. Without wide frames the HBA is unchanged.
+
+| route 46 replay, same narrow pipeline | wide guard off | on |
+|---|---|---|
+| high beam permitted while an obvious lamp is in view, whole route | 1.0 s | 0.6 s |
+| ...at ≥ 50 km/h | 0.5 s | 0.3 s |
+| ...segs 9–21 | 0.5 s | 0.3 s |
+| high beam permitted at ≥ 50 km/h (24 min dark) | 305.7 s | 301.8 s |
+| dips, whole route | 41 | 39 |
+
+Without the reach test, glare was 0.3 s but the guard cost 7 s of high beam, mostly on yard lights in seg 20. The 0.3 s
+left at speed is the first frame of three cars appearing inside the narrow view (seg 9 21.8 s, seg 11 7.4 s, seg 13 37.5 s,
+the last next to a lit yellow sign), which the wide camera can't help with. The 0.3 s below 50 km/h is a parking lot
+(seg 0 51.8 s, 7 km/h), where the speed gate keeps the high beam off anyway. Most of the 3.9 s cost is real cars: one in seg 14
+seen earlier, and cars passing at 12–15 m whose dip now lasts until they're beside us. One yard light in seg 20 (reach 11 m)
+is the rest.
+
+c9 has no wide video (`ecamera`), so it's unchanged: vehicle threat 96.0 %, glare 0.0 %, nuisance 14.3 %. Route 46 is the
+only night drive with wide video so far, so the thresholds rest on its 34 minutes.
+
 ## 6. Interfaces, as implemented
 
 Data flow:
@@ -374,14 +464,25 @@ carState, starpilotCarState ───┘                       (freshness + mode
 - **Sun:** live GPS, falling back to `LastGPSPosition` up to a week old, plus the wall clock once `system_time_valid()`.
 - **HBA:** runs on its own thread (`HbaWorker`) at up to ~10 Hz on the newest narrow VisionIPC frame. The loop hands it
   the newest context and reads the newest result without waiting, so a slow HBA never slows the low beam.
-  - The frame stays NV12. Only the corridor's bounding box is converted, thresholded and labelled, and the corridor
-    dilation only touches that box. OpenCV runs on one thread.
+  - The frame stays NV12. Only the corridor's bounding box is labelled, and only small boxes inside it are converted to
+    BGR/HSV: around 2x2 blocks whose brightest Y reaches a per-chroma table (the lowest Y at which any pixel with that
+    chroma pair passes the white or red test, built once from OpenCV's own conversion, ~0.7 s on the A55), each grown by
+    its own size for the halo/ring tests. The rest stays 0, which passes nothing, so the blobs are the same as converting
+    the whole box. OpenCV runs on one thread.
+  - CPU (comma four, A55 core, 240 real night frames from route 46): ~24 ms/frame before the 2026-10-17 optimisation pass,
+    now 9.2 ms median on rural road with oncoming cars (seg 9, was 18.6), 13.3 ms in town (seg 2, was 21.7; p90 21 ms, was
+    43), 6.1 ms on curves (seg 14, was 14.7). The wide guard: 3.0 ms per look (was 6.4). Decisions unchanged.
+  - The HBA thread pins itself to cores 0-3, next to locationd/paramsd, so its ~10-14 % of one A55 never competes with
+    card/controlsd (4), plannerd/radard (5) or modeld (7) on the big cores.
   - Message `valid` is alive + valid of the poll camera. Its average-rate check is ignored, because it measured this
     loop: at 100 ms per inline HBA frame the loop fell to ~9 Hz, `valid` went false, and card dropped the low beam too.
   - It runs in mode 1 (shadow) and mode 3. It needs `calStatus == calibrated`, `modelV2` within 5 frames of the image, and `carState` alive.
   - It also gets `livePose.angularVelocityDevice` (gyro, for tracking and pitch), `starpilotCarState.highBeamOn` (the
     reflector cue) and `mapdOut.speedLimit` (the town gate). Without them it runs as before: no compensation, no beam
     cue, town from streetlights only.
+  - In the dark, every 0.2 s it also pulls the newest wide VisionIPC frame (a second client) for the glare guard, unless
+    `DisableWideRoad` is set. It only uses that frame if it's within 2 frames of the narrow one and the calibration has
+    `wideFromDeviceEuler`. The wide camera never affects `hbaValid`.
   - `hbaValid` drops 0.3 s after the last processed frame, or at once if the worker thread died.
 - **Process:** `PythonProcess("lightd", ..., run_lightd, nice=10)`. It runs onroad when `volkswagen_lightd_mode >= 1`,
   and that toggle is only non-zero on PQ cars.
@@ -435,7 +536,8 @@ starpilot/system/lightd/
   hba.py           HbaClassifier (pure + cv2)
   solar.py         NOAA sun position
   tools/replay_lightd.py
-  tools/replay_hba.py     HBA over logged video, hand-label scoring, annotated frames
+  tools/replay_hba.py     HBA over logged video (+ wide video for the glare guard), hand-label scoring, classifier-independent
+                          glare check, annotated frames
   tools/bench_hba.py      per-stage timing on the device
 starpilot/system/tests/test_lightd_{ambient,hba,solar}.py
 opendbc/car/volkswagen/fla.py (+ tests/test_volkswagen_fla.py)

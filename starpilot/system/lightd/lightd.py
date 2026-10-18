@@ -7,10 +7,12 @@ is 2 (low beam) or 3 (low + high beam); mode 1 only logs. See DESIGN.md.
 Low beam and HBA have independent validity, as the J519 contract requires:
   lowBeamValid: fresh, advancing camera AE state and a settled estimator.
   hbaValid:     a narrow-camera frame processed within HBA_STALE_S with a fresh model and a valid calibration.
+                The wide camera only adds a glare guard every WIDE_PERIOD_S; without it the HBA still works.
 The HBA runs on its own thread (HbaWorker), so its cost never slows the loop or the message's validity.
 """
 import json
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -31,7 +33,9 @@ MODE_OFF, MODE_SHADOW, MODE_LOW_BEAM, MODE_LOW_AND_HIGH_BEAM = range(4)  # same 
 
 HBA_PERIOD_S = 0.1     # run the HBA classifier at up to ~10 Hz
 HBA_STALE_S = 0.3      # no processed frame for this long (slow or dead worker): HBA invalid
+WIDE_PERIOD_S = 0.2    # the wide-camera glare guard looks this often (it only needs big lamps)
 MODEL_MAX_FRAME_LAG = 5
+WIDE_MAX_FRAME_LAG = 2  # the wide frame must be from about the same time as the narrow one
 SOLAR_PERIOD_S = 1.0
 GPS_CACHE_MAX_AGE_S = 7 * 24 * 3600  # a week-old position still puts sunset within minutes
 
@@ -51,7 +55,6 @@ def model_dict(md):
     "position": xyz(md.position),
     "lanes": [xyz(line) for line in md.laneLines],
     "lane_probs": list(md.laneLineProbs),
-    "edges": [xyz(edge) for edge in md.roadEdges],
     "leads": [(lead.prob, lead.x[0], lead.y[0]) for lead in md.leadsV3 if len(lead.x)],
   }
 
@@ -117,12 +120,16 @@ class HbaResult:
 
 
 class HbaRunner:
-  """Pulls the newest narrow-camera frame and runs the HBA classifier on it."""
+  """Pulls the newest narrow-camera frame and runs the HBA classifier on it, with the newest wide-camera frame every
+  WIDE_PERIOD_S in the dark (wide=False: never, e.g. DisableWideRoad)."""
 
-  def __init__(self):
+  def __init__(self, wide: bool = True):
     self.client = None
+    self.wide_client = None
+    self.use_wide = wide
     self.clf = HbaClassifier()
     self.last_run = -math.inf
+    self.last_wide_run = -math.inf
     self.last_frame_id = 0
 
   def _connect(self):
@@ -134,9 +141,21 @@ class HbaRunner:
     return self.client.is_connected()
 
   def _latest_frame(self):
+    return self._drain(self.client)
+
+  def _latest_wide(self):
+    from msgq.visionipc import VisionIpcClient, VisionStreamType
+    if self.wide_client is None:
+      self.wide_client = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD, True)
+    if not self.wide_client.is_connected():
+      self.wide_client.connect(False)
+    return self._drain(self.wide_client) if self.wide_client.is_connected() else (None, None)
+
+  @staticmethod
+  def _drain(client):
     buf = None
     while True:
-      b = self.client.recv(timeout_ms=0)
+      b = client.recv(timeout_ms=0)
       if b is None:
         break
       buf = b
@@ -147,7 +166,7 @@ class HbaRunner:
     w, h, stride = buf.width, buf.height, buf.stride
     y = data[:h * stride].reshape(h, stride)[:, :w]
     uv = data[buf.uv_offset:buf.uv_offset + h // 2 * stride].reshape(h // 2, stride)[:, :w]
-    return Nv12Frame(y, uv), self.client.frame_id
+    return Nv12Frame(y, uv), client.frame_id
 
   def update(self, ctx: HbaContext) -> HbaResult | None:
     """None when nothing was processed (not due yet, no camera, no new frame)."""
@@ -164,9 +183,16 @@ class HbaRunner:
     model_fresh = ctx.model_alive and abs(int(frame_id) - int(md.frameId)) <= MODEL_MAX_FRAME_LAG
     valid = bool(calibrated and model_fresh and ctx.car_alive)
     height = calib.height[0] if len(calib.height) else 1.22
+    wide = wide_euler = None
+    if (self.use_wide and valid and ctx.dark and ctx.now - self.last_wide_run >= WIDE_PERIOD_S
+        and len(calib.wideFromDeviceEuler) == 3):
+      wf, wide_id = self._latest_wide()
+      if wf is not None and abs(int(wide_id) - int(frame_id)) <= WIDE_MAX_FRAME_LAG:
+        wide, wide_euler = wf, list(calib.wideFromDeviceEuler)
+        self.last_wide_run = ctx.now
     out = self.clf.update(ctx.now, frame, model_dict(md) if valid else None, list(calib.rpyCalib) if calibrated else None,
                           height, ctx.v_ego, dark=ctx.dark, valid=valid, high_beam_on=ctx.high_beam_on, ang_vel=ctx.ang_vel,
-                          speed_limit=ctx.speed_limit)
+                          speed_limit=ctx.speed_limit, wide=wide, wide_euler=wide_euler)
     self.last_run = ctx.now
     self.last_frame_id = int(frame_id)
     return HbaResult(ctx.now, out, self.last_frame_id, (time.monotonic() - t0) * 1e3)
@@ -201,6 +227,13 @@ class HbaWorker:
       return self._result
 
   def _run(self):
+    # Pin this thread (pid 0 from a thread is the thread on Linux) to the little cores, where openpilot keeps the
+    # non-realtime daemons like locationd/paramsd. card/controlsd (4) and plannerd/radard (5) are on the big cores,
+    # modeld on 7, 6-7 are isolated. The HBA needs ~10-14 % of one A55 at 10 Hz.
+    try:
+      os.sched_setaffinity(0, {0, 1, 2, 3})
+    except (OSError, AttributeError):
+      cloudlog.warning("lightd: could not pin hba thread to cores 0-3")
     while True:
       self._wake.wait()
       self._wake.clear()
@@ -225,7 +258,7 @@ class LightD:
     self.gps_service = gps_service
     self.ambient = AmbientEstimator()
     self.solar = solar
-    self.hba = hba or HbaWorker()
+    self.hba = hba or HbaWorker(HbaRunner(wide=not wide_disabled))
     self.last_frame = {"wideRoadCameraState": -1, "roadCameraState": -1}
     self.last_sample: dict[str, CameraSample | None] = {"wideRoadCameraState": None, "roadCameraState": None}
 

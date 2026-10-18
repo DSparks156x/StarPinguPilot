@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Replay logged drives through the HBA classifier and score it with hindsight labels. StarPinguPilot.
 
-  replay_hba.py <route dir> [...] [--segs 3-6] [--out prefix] [--jpg N] [--clf other_hba.py]
+  replay_hba.py <route dir> [...] [--segs 3-6] [--out prefix] [--jpg N] [--clf other_hba.py] [--no-wide]
 
-A route dir is the flat layout pingulink uploads: rlog--<n>.zst plus fcamera--<n>.hevc. Video is decoded with ffmpeg to
-NV12 and fed to the classifier at HBA_PERIOD_S like lightd does, with the model, calibration, speed, gyro, the car's
-own high-beam state (Gate_Komf_1) and the mapd speed limit (if the log has mapdOut) at that frame.
+A route dir is the flat layout pingulink uploads: rlog--<n>.zst plus fcamera--<n>.hevc, and ecamera--<n>.hevc for the
+wide guard if it was uploaded. Video is decoded with ffmpeg to NV12 and fed to the classifier at HBA_PERIOD_S like lightd
+does (the wide frame every WIDE_PERIOD_S), with the model, calibration, speed, gyro, the car's own high-beam state
+(Gate_Komf_1) and the mapd speed limit (if the log has mapdOut) at that frame.
 
 Outputs:
   <out>_frames.csv   one row per processed frame: decision, reason, counts
   <out>_tracks.csv   one row per live track per processed frame, with its hindsight label
+  <out>_wide.csv     one row per bright light the wide guard looked at, with its tests
   <out>_jpg/         annotated frames at every dip/restore and every --jpg seconds
 and a summary on stdout.
 
@@ -31,12 +33,13 @@ import cv2
 import numpy as np
 
 from cereal import log
-from openpilot.starpilot.system.lightd.lightd import HBA_PERIOD_S, MODEL_MAX_FRAME_LAG, mapd_speed_limit, model_dict
+from openpilot.starpilot.system.lightd.lightd import HBA_PERIOD_S, MODEL_MAX_FRAME_LAG, WIDE_PERIOD_S, mapd_speed_limit, model_dict
 from openpilot.starpilot.system.lightd.solar import solar_position
 from openpilot.tools.lib.logreader import LogReader
 
 FRAME_COLS = ("seg", "idx", "t", "frame_id", "truth", "v", "dark", "high_beam", "permitted", "threat", "reason", "n_oncoming",
-              "n_preceding", "n_candidates", "lead_prob", "town", "town_lights", "ms")
+              "n_preceding", "n_candidates", "lead_prob", "town", "town_lights", "lamp", "n_wide", "ms")
+WIDE_COLS = ("seg", "idx", "t", "u", "v", "area", "peak", "chroma", "ring", "reach", "lamp", "permitted")
 TRACK_COLS = ("seg", "t", "frame_id", "tid", "u", "v", "pred_err", "area", "peak", "red", "paired", "post", "flux", "sat", "dist",
               "lateral", "kind", "why", "obj_speed", "age", "reflector", "threat", "label")
 KIND_BGR = {"oncoming": (0, 0, 255), "preceding": (0, 165, 255), "candidate": (255, 0, 255), "static": (0, 200, 0)}
@@ -59,8 +62,9 @@ def segments(route, segs):
     if m and (segs is None or int(m.group(1)) in segs):
       n = int(m.group(1))
       log = os.path.join(route, f"rlog--{n}.zst")
+      wide = os.path.join(route, f"ecamera--{n}.hevc")
       if os.path.exists(log):
-        out.append((n, log, os.path.join(route, f)))
+        out.append((n, log, os.path.join(route, f), wide if os.path.exists(wide) else None))
   return sorted(out)
 
 
@@ -79,6 +83,7 @@ class SegmentLog:
 
   def __init__(self, path):
     self.enc = {}          # segmentId -> (frameId, t)
+    self.wide_enc = {}     # segmentId -> frameId, wide camera
     self.models = {}       # frameId -> model dict
     self.calib, self.car, self.pose, self.hb, self.limit = [], [], [], [], []
     self.gps = None
@@ -87,12 +92,15 @@ class SegmentLog:
       if w == "roadEncodeIdx":
         e = m.roadEncodeIdx
         self.enc[e.segmentId] = (e.frameId, e.timestampEof * 1e-9)
+      elif w == "wideRoadEncodeIdx":
+        self.wide_enc[m.wideRoadEncodeIdx.segmentId] = m.wideRoadEncodeIdx.frameId
       elif w == "modelV2":
         self.models[m.modelV2.frameId] = model_dict(m.modelV2)
       elif w == "liveCalibration":
         c = m.liveCalibration
         calibrated = c.calStatus == log.LiveCalibrationData.Status.calibrated and len(c.rpyCalib) == 3
-        self.calib.append((t, list(c.rpyCalib) if calibrated else None, c.height[0] if len(c.height) else 1.22))
+        wide = list(c.wideFromDeviceEuler) if calibrated and len(c.wideFromDeviceEuler) == 3 else None
+        self.calib.append((t, list(c.rpyCalib) if calibrated else None, c.height[0] if len(c.height) else 1.22, wide))
       elif w == "carState":
         self.car.append((t, m.carState.vEgo))
       elif w == "livePose":
@@ -145,8 +153,41 @@ def decode(path, w=1344, h=760):
     proc.kill()
 
 
-def annotate(path, y, uv, clf, out, info):
+def obvious_lamp(y, uv):
+  """Area of the biggest saturated, near-white blob in the left two thirds of the band where lamps can be, ignoring the
+  classifier entirely: a crude ground truth for "an oncoming car is right there". 0 if none."""
+  h, w = y.shape
+  band = slice(h // 3, h * 5 // 6)
+  yy = y[band, :w * 2 // 3]
+  m = cv2.threshold(yy, 229, 255, cv2.THRESH_BINARY)[1]  # NV12 Y is video range: 235 is white
+  n, lab, st, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+  best = 0
+  for i in range(1, n):
+    x0, y0, bw, bh, area = st[i]
+    if area < OBVIOUS_LAMP_AREA or area <= best or bh > 2.5 * bw:
+      continue
+    # chroma from the NV12 plane (2x2 blocks): far from neutral is a lit sign
+    cu = uv[(band.start + y0) // 2:(band.start + y0 + bh) // 2 + 1, (x0 // 2) * 2:((x0 + bw) // 2 + 1) * 2].reshape(-1, 2)
+    # and a lamp blooms: a white sign lit by our beams has a dark surround
+    pad = max(bw, bh)
+    ys, xs = slice(max(0, y0 - pad), y0 + bh + pad), slice(max(0, x0 - pad), x0 + bw + pad)
+    ring = yy[ys, xs][lab[ys, xs] != i]
+    if len(cu) and np.median(np.abs(cu.astype(int) - 128).sum(axis=1)) < 40 and len(ring) and np.median(ring) >= 40:
+      best = int(area)
+  return best
+
+
+OBVIOUS_LAMP_AREA = 60
+
+
+def annotate(path, y, uv, clf, out, info, wide=None):
   bgr = cv2.cvtColor(np.concatenate([y, uv]), cv2.COLOR_YUV2BGR_NV12)
+  if wide is not None:
+    # the wide frame on the right, with the lights the guard last looked at: red dips, grey failed a test
+    wbgr = cv2.cvtColor(np.concatenate(wide), cv2.COLOR_YUV2BGR_NV12)
+    for w in getattr(clf, "last_wide", []):
+      cv2.circle(wbgr, (int(w.u), int(w.v)), 8 + int(math.sqrt(w.area)), (0, 0, 255) if w.lamp else (150, 150, 150), 2)
+    bgr = np.concatenate([bgr, wbgr], axis=1)
   if clf.last_mask is not None:
     cs, _ = cv2.findContours(clf.last_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(bgr, cs, -1, (90, 90, 90), 1)
@@ -227,6 +268,10 @@ def summarize(frames, tracks):
         f"permitted: {100 * sum(f['permitted'] for f in fr) / len(fr):.1f} %")
   print("threat cause (frames): " + ", ".join(f"{k} {v}" for k, v in sorted(why.items())))
   print(f"glare frames (vehicle track live, no threat): {glare}")
+  lamp = [f for f in fr if f.get("lamp", 0) >= OBVIOUS_LAMP_AREA]
+  if lamp:
+    print(f"OBVIOUS LAMP (big neutral blob, left 2/3, classifier-independent): {len(lamp) * HBA_PERIOD_S:.0f} s, "
+          f"high beam permitted for {sum(f['permitted'] for f in lamp) * HBA_PERIOD_S:.1f} s of it")
   # town spans as segment seconds (video index / 20), split at gaps over a second
   spans = []
   for f in fr:
@@ -240,6 +285,9 @@ def summarize(frames, tracks):
   print(f"town: {sum(f.get('town', 0) for f in fr) * HBA_PERIOD_S:.0f} s  " +
         " ".join(f"{s}:{a:.0f}-{b:.0f}" for s, a, b in spans))
   print("tracks: " + ", ".join(f"{k} {len(v)}" for k, v in sorted(labels.items())))
+  wide_only = [f for f in fr if f.get("n_wide") and not (f["n_oncoming"] or f["n_candidates"] or f["n_preceding"])]
+  print(f"wide guard: lamps in {sum(1 for f in fr if f.get('n_wide')) * HBA_PERIOD_S:.1f} s, the only threat in "
+        f"{len(wide_only) * HBA_PERIOD_S:.1f} s")
   hand = [f for f in fr if f["truth"] in ("vehicle", "none")]
   if hand:
     veh = [f for f in hand if f["truth"] == "vehicle"]
@@ -280,6 +328,7 @@ def main():
   ap.add_argument("--no-gyro", action="store_true")
   ap.add_argument("--gyro-sign", type=float, default=1.0, help="debug: scale the gyro input")
   ap.add_argument("--no-beam", action="store_true")
+  ap.add_argument("--no-wide", action="store_true", help="don't feed the wide camera even if the route has it")
   ap.add_argument("--labels", help="csv route,seg,t0,t1,label (vehicle/none/ambiguous), t in seconds into the segment")
   ap.add_argument("--at", help="also save these frames: seg:first-last seconds, e.g. 5:6-10,6:30-31")
   args = ap.parse_args()
@@ -301,19 +350,23 @@ def main():
   segs = parse_segs(args.segs)
   jpg_dir = args.out + "_jpg"
   os.makedirs(jpg_dir, exist_ok=True)
-  frames, tracks = [], []
+  frames, tracks, wides = [], [], []
 
   for route in args.routes:
     rname = os.path.basename(os.path.normpath(route))
-    for n, log_path, video in segments(route, segs):
+    for n, log_path, video, wide_video in segments(route, segs):
       seg = f"{rname[:8]}/{n}"
       lg = SegmentLog(log_path)
       clf = hba.HbaClassifier()
       if not args.speed_gate:
         clf.p.enable_v = clf.p.disable_v = -1.0
       extras = set(inspect.signature(clf.update).parameters)
-      last_run, last_jpg, last_permit = -math.inf, -math.inf, None
+      last_run, last_jpg, last_permit, last_wide, wide_on = -math.inf, -math.inf, None, -math.inf, False
+      wide_it = decode(wide_video) if wide_video and not args.no_wide and "wide" in extras else None
+      wf = None
       for idx, (y, uv) in enumerate(decode(video)):
+        # the wide video advances with the narrow one; wideRoadEncodeIdx says whether it's the same camera frame
+        wf = next(wide_it, None) if wide_it is not None else None
         if idx not in lg.enc:
           continue
         fid, t = lg.enc[idx]
@@ -335,6 +388,11 @@ def main():
         if "speed_limit" in extras:
           lim = lg.at("limit", t)  # pre-StarPilot logs have no mapdOut
           kw["speed_limit"] = lim[1] if lim is not None and t - lim[0] < 1.0 else None
+        looked = (wf is not None and t - last_wide >= WIDE_PERIOD_S - 1e-3 and lg.wide_enc.get(idx) == fid
+                  and cal is not None and cal[3] is not None)
+        if looked:
+          last_wide = t
+          kw["wide"], kw["wide_euler"] = hba.Nv12Frame(*wf), cal[3]
         t0 = cv2.getTickCount()
         out = clf.update(t, hba.Nv12Frame(y, uv), model, rpy, cal[2] if cal else 1.22, v, dark=dark,
                          valid=model is not None and rpy is not None, **kw)
@@ -344,7 +402,11 @@ def main():
                        "threat": int(out.threat), "reason": out.reason,
                        "n_oncoming": out.n_oncoming, "n_preceding": out.n_preceding, "n_candidates": out.n_candidates,
                        "lead_prob": out.lead_prob, "town": int(getattr(out, "town", False)),
-                       "town_lights": round(getattr(out, "town_lights", 0.0), 2), "ms": ms})
+                       "town_lights": round(getattr(out, "town_lights", 0.0), 2), "lamp": obvious_lamp(y, uv),
+                       "n_wide": getattr(out, "n_wide", 0), "ms": ms})
+        if looked and dark:
+          wides += [{"seg": seg, "idx": idx, "t": t, **w._asdict(), "lamp": int(w.lamp), "permitted": int(out.high_beam_permitted)}
+                    for w in clf.last_wide]
         for tr in clf.tracks:
           if tr.missed:
             continue
@@ -358,16 +420,19 @@ def main():
         changed = last_permit is not None and out.high_beam_permitted != last_permit
         last_permit = out.high_beam_permitted
         wanted = (n, idx // 2) in jpg_at  # video index at 20 Hz, --at in tenths of a second
-        if wanted or (dark and out.valid and (changed or (args.jpg and t - last_jpg >= args.jpg))):
+        wide_onset = bool(getattr(out, "n_wide", 0)) and not wide_on  # every time the wide guard starts a threat
+        wide_on = bool(getattr(out, "n_wide", 0))
+        if wanted or wide_onset or (dark and out.valid and (changed or (args.jpg and t - last_jpg >= args.jpg))):
           last_jpg = t
           info = (f"{seg} f{fid} {v * 3.6:.0f}kmh {'HIGH' if out.high_beam_permitted else 'low'} reason {out.reason} "
                   f"onc {out.n_oncoming} pre {out.n_preceding} cand {out.n_candidates} lead {out.lead_prob:.2f}")
-          annotate(os.path.join(jpg_dir, f"{rname[:8]}_{n:03d}_{idx:04d}{'_chg' if changed else ''}.jpg"), y, uv, clf, out, info)
+          tag = ("_chg" if changed else "") + ("_wide" if wide_onset else "")
+          annotate(os.path.join(jpg_dir, f"{rname[:8]}_{n:03d}_{idx:04d}{tag}.jpg"), y, uv, clf, out, info, wf)
       print(f"{seg}: {sum(1 for f in frames if f['seg'] == seg)} frames, "
             f"{np.mean([f['ms'] for f in frames if f['seg'] == seg]):.1f} ms/frame")
 
   label_tracks(tracks)
-  for name, rows, cols in (("frames", frames, FRAME_COLS), ("tracks", tracks, TRACK_COLS)):
+  for name, rows, cols in (("frames", frames, FRAME_COLS), ("tracks", tracks, TRACK_COLS), ("wide", wides, WIDE_COLS)):
     with open(f"{args.out}_{name}.csv", "w", newline="") as f:
       wr = csv.DictWriter(f, cols, extrasaction="ignore")
       wr.writeheader()
