@@ -89,6 +89,8 @@ class SettingsLayout(NavScroller):
     self._force_drive_state_btn = ForceDriveStateBigButton()
     self._driving_model_btn = DrivingModelBigButton()
     galaxy_btn = GalaxyBigButton()
+    pingulink_btn = SettingsBigButton("pingulink", "", gui_app.texture("icons_mici/settings.png", 64, 64))  # StarPinguPilot
+    pingulink_btn.set_click_callback(lambda: gui_app.push_widget(self._pingulink_panel))
 
     self._scroller.add_widgets([
       toggles_btn,
@@ -101,6 +103,7 @@ class SettingsLayout(NavScroller):
       self._driving_model_btn,
       visuals_btn,
       galaxy_btn,
+      pingulink_btn,
       PairBigButton(),
       #BigDialogButton("manual", "", "icons_mici/settings/manual_icon.png", "Check out the mici user\nmanual at comma.ai/setup"),
       developer_btn,
@@ -112,6 +115,11 @@ class SettingsLayout(NavScroller):
   def _bluetooth_panel(self):
     from openpilot.selfdrive.ui.mici.layouts.settings.bluetooth import BluetoothLayoutMici
     return BluetoothLayoutMici()
+
+  @cached_property
+  def _pingulink_panel(self):
+    from openpilot.selfdrive.ui.mici.layouts.settings.pingulink import PingulinkLayoutMici
+    return PingulinkLayoutMici()
 
   @cached_property
   def _vehicle_panel(self):

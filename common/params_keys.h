@@ -820,4 +820,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0", "0", 2}},
     {"VolkswagenHCAMode", {PERSISTENT, INT, "1", "0", 2}},
     {"VolkswagenLightdMode", {PERSISTENT, INT, "0", "0", 2}},
+    {"PingulinkEnable", {PERSISTENT, BOOL, "0", "0", 0}},
+    {"PingulinkUrl", {PERSISTENT, STRING}},
+    {"PingulinkToken", {PERSISTENT | DONT_LOG, STRING}},
+    {"PingulinkLastPing", {PERSISTENT, STRING}},
+    {"PingulinkLastPingStatus", {PERSISTENT, STRING}},
+    {"PingulinkPendingCount", {PERSISTENT, STRING}},
 };

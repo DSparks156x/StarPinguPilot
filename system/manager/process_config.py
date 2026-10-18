@@ -75,6 +75,10 @@ def always_run(started: bool, params: Params, CP: car.CarParams, starpilot_toggl
 def only_onroad(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return started
 
+def use_pingulink(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
+  # StarPinguPilot
+  return params.get_bool("PingulinkEnable")
+
 def only_offroad(started: bool, params: Params, CP: car.CarParams, starpilot_toggles: SimpleNamespace) -> bool:
   return not started
 
@@ -210,6 +214,7 @@ procs = [
   PythonProcess("tombstoned", "system.tombstoned", always_run, enabled=not PC),
   PythonProcess("updated", "system.updated.updated", always_run, enabled=not PC),
   PythonProcess("uploader", "system.loggerd.uploader", allow_uploads, nice=19),
+  PythonProcess("pingulink_uploader", "system.pingulink.uploader", use_pingulink, nice=19),  # StarPinguPilot
   PythonProcess("statsd", "system.statsd", always_run),
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
 
