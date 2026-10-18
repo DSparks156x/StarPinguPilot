@@ -235,13 +235,116 @@ What the pass covered:
   its lights on, a car parked on the left shoulder, distant lights at the end of the road). Parked cars and reflectors on our side
   are labelled static.
 
+### Second pass (2026-10-17): replay harness, hand labels, fixes
+
+**Harness.** `tools/replay_hba.py` replays pingulink route dirs (`rlog--N.zst` + `fcamera--N.hevc`) through the classifier at
+`HBA_PERIOD_S`. It feeds the model, calibration, speed, `livePose` gyro and `GK1_Fernlicht` at each frame and decodes the video to
+NV12 with ffmpeg. It writes per-frame and per-track CSVs (each track carries the rule that set its kind, `why`), and annotated
+JPEGs at every dip/restore, every `--jpg` s or `--at seg:t0-t1`. `--labels` scores against hand labels
+(`route,seg,t0,t1,vehicle|none|ambiguous`): vehicle-time threat rate, glare (permitted while a vehicle is present), missed runs
+≥ 1 s, and nuisance (threat while nothing is there). `--clf other_hba.py` compares against a saved copy. The hindsight auto-labels
+(near-range motion) are weak: a car followed at 200 m never resolves, so trust the hand labels and the JPEGs.
+
+**New data.** `c9` (2026-05-27 03:42Z, sun −5°, 70–88 km/h, two-lane mountain road) segments 3, 5, 6, hand-labelled at 2 s:
+80 s with a vehicle, 70 s with none. Lots of delineators, lit green/yellow signs, orange chevrons, a following car most of seg 3.
+`c5` (sun +2°) also has video. `dc/dd/de` stay the slow regression set.
+
+**Bugs found and fixed:**
+- **The corridor sat 1.2 m too low whenever lanes were visible.** `laneLines` z is already road level (~+1.14 m below the camera
+  at 20 m); only `position` (the device's own path) needs `+ height`. The UI does the same (lanes z_off 0, path z_off height). At 50 m
+  that was ~27 px, so real lamps sat on the corridor's top edge. `road_centerline` now returns road-level z.
+- **Frame-count timing.** confirm/motion/dip/missed were frame counts written for 20 Hz; the worker runs at ≤ 10 Hz, so confirm took
+  0.8 s. Everything is in seconds now (`confirm_s`, `motion_s`, `dip_s`, `max_missed_s`, `pair_window_s`).
+- **Wet/glare-smeared far headlights were "posts".** The far oncoming car at c9/5 6–8 s was two tall blobs, so each one got marked a
+  delineator and static. Tall blobs may now pair (within 5× their height), and a paired blob is never a post.
+- **Lit yellow signs passed the white test** (saturated yellow has luma ≈ 226), and orange chevrons passed the red test. Blobs whose
+  pixels are saturated yellow/green, or that have more saturated yellow around them than their own area, are dropped.
+
+**Changes:**
+- Range comes from the ray's first crossing of lamp height over the model's road profile, in either direction, so lamps above
+  the camera horizon on an uphill road are ranged. The flat plane is gone. Lights whose ray never passes through the lamp band
+  between 15 and 600 m, or only within 30 m while small, are `high` (buildings, signs and streetlights let in by the margin).
+- Past the model horizon the corridor widens by 0.02 m/m sideways and 0.01 m/m up and down.
+- A red-only band one lane wider on the far side when the model sees a lane there (`laneLineProbs[3]`). Red lights skip the
+  roadside rule when far (> 70 m, where the path lags curves) or when that lane exists; close by on a two-lane road they're parked cars.
+- A big white blob is "a car pointing at the road" only within 8 m of our lane centre; farther out it's a lit sign.
+- A white light "moving away" sits lower than a lamp (pavement markers, low reflectors): static.
+- Static voting: a track that looked static for half of the last second stays static unless it shows vehicle evidence (oncoming
+  motion, a strong lamp pair). Single frames flip between rules, and each flip to a threat was a dip.
+- Restore backoff: a restore cut short within 3 s by weak evidence doubles the clear time (2 → 4 → 8 s). It resets after 10 s
+  permitted. A model lead, a strong lamp or oncoming motion doesn't count.
+- Gyro (`livePose.angularVelocityDevice`): tracks are predicted through the rotation since the last frame, and the projection uses
+  calibration minus the high-passed (1.5 s) rotation, so bumps don't move the corridor or the ranges. The sign was checked on c9:
+  median prediction error 4.0 px with it, 4.8 px without, 6.8 px flipped; the share of near lights at |speed| < 4 m/s went 14 → 22 %.
+- High-beam feedback (`starpilotCarState.highBeamOn`): a track whose brightness rises ≥ 1.8× within 0.15–0.6 s of our high beam
+  switching on (or falls as much after it switches off) is a retroreflector for good. So is an unpaired light that first appears
+  within 0.4 s after switching on. Untested on real data: none of the logs has the high beam on.
+
+**Results** (c9 hand labels, speed gate off; baseline is the first-pass classifier):
+
+| | baseline | now |
+|---|---|---|
+| vehicle present: threat | 91.2 % | 95.9 % |
+| vehicle present: high beam permitted (glare) | 2.2 % | 0.0 % |
+| vehicle present: missed runs ≥ 1 s | 3.8 s | 0 s |
+| nothing present: threat (nuisance) | 37.6 % | 20.4 % |
+| nothing present: high beam permitted | 31.6 % | 42.1 % |
+
+`dc/dd/de` (slow, unlabelled): threat frames 14.7 → 12.1 %, dips 3.4 → 2.8 /min, permitted 66.5 → 69.9 %. Every restore moment was
+checked by eye: no vehicle in view. Desktop cost is ~2 ms/frame, about the same as before.
+
+**Tried and dropped:** the brightness-vs-distance exponent (lamps ∝ d⁻², reflectors lit by us ∝ d⁻⁴). A constant range-scale
+error doesn't change the slope, but near the horizon the per-frame range within one track swings 50–400 m, and the fitted exponents
+on c9 spread from −1 to 2.5 with no separation. It would need a much better range (pairs, or a longer baseline).
+
+**PWM:** `FL1_Fernlicht_PWM` doesn't dim the TT's bi-xenon high beam (it's a shutter, per the owner), so there's no soft fade-in.
+Send 100 or 0.
+
 Known gaps and next steps:
-- Highway-speed night data with oncoming traffic: the real test.
-- Pairing (two lamps on one row, 1.2–1.9 m apart) as a scale-free distance estimate and a strong vehicle cue.
-- Distant house lights at the end of straight roads read as candidates.
-- Left-side white delineators still look like oncoming lamps at speed.
+- 70 s of labelled empty road and 80 s with vehicles is a small set. Nuisance is still 20 %, mostly retroreflectors on our side
+  past the model horizon (curves), lights at junctions and town edges, and far lights with an unreliable range. More labelled
+  night drives at speed (pingulink on the device) are the bottleneck, not compute.
+- The high-beam feedback cue needs logs with the high beam on: shadow mode plus manual high beams.
+- Track vehicles as lamp pairs rather than single lamps, then a learned per-track score (GBDT on the CSV features) once there are
+  enough labels.
+- Town gate: see below.
 - The wide camera isn't used yet.
-- Fog/backscatter and "our high beam lights it up" cues need data with the high beam on.
+- Fog/backscatter needs data with the high beam on.
+
+### Town gate (2026-10-17)
+
+`REASON_TOWN` (8) blocks the high beam like the speed gate. Two cues, OR'd:
+- **Streetlight density.** Each frame counts bright (Y ≥ 180), unsaturated lights outside the corridor above the row of a
+  point 3 m over the road 150 m out. Above that row a light is higher than 3 m or nearer than 150 m, so it isn't a
+  vehicle's lamp. Lit signs that get in (near ones) are dropped by colour: yellow is saturated, and green has hue 38–100.
+  The band is labelled 2×2 max-pooled (a light's peak survives it), then each light is measured at full resolution.
+  That's ~1 ms on desktop with 30 lights in view and much less on an empty road. Town starts when the mean over 4 s is
+  ≥ 2 lights per frame, and ends 10 s after that mean drops below 0.5.
+- **Posted limit ≤ 50 km/h** from `mapdOut.speedLimit`, only when mapd matched the way (`waySelectionType` current or
+  extended). lightd reads `mapdOut` itself, because `starpilotPlan.slcMapSpeedLimit` is only filled while SLC is on.
+  Untested: every log with video predates StarPilot, so none has `mapdOut`.
+
+Data (light counts per frame): the c9 mountain town peaks at 6.6, the open road in c9 segs 5–6 at 1.0 (one lone yard
+light or streetlight at a time), and c9 seg 4 (a stop and a junction at the town's edge) at 1.2. Height alone
+doesn't separate them: lit green guide signs reach 5–12 m on the 150 m line, while the town's windows are at 6–7 m.
+Colour does: town lights are warm and pale (hue 11–35, saturation 20–75).
+
+| replay (speed gate off) | before | after |
+|---|---|---|
+| c9 3–6: town | — | 10 s, c9/3 50–60 s only |
+| c9 3–6: vehicle present: threat / glare | 95.9 % / 0.0 % | same |
+| c9 3–6: nothing present: permitted | 42.1 % | 37.3 % (c9/3 51–60 is town, 12.9 % of "none") |
+| dc/dd/de: town | — | 113 of 428 s (lit residential streets) |
+| dc/dd/de: permitted | 69.9 % | 54.5 % |
+
+The replay starts a new classifier per segment, so the town state doesn't carry from c9/3 into c9/4.
+
+Known gaps:
+- The moon, or a lit town across a valley, counts like a streetlight. One light alone stays under the threshold, but it
+  plus a lone yard light gets close. Static far lights could be rejected by their lack of parallax (gyro-predicted
+  position), if it shows up in data.
+- An unlit village doesn't register at all, which is why the mapd cue matters.
+- The thresholds rest on one town and three residential drives.
 
 ## 6. Interfaces, as implemented
 
@@ -276,6 +379,9 @@ carState, starpilotCarState ───┘                       (freshness + mode
   - Message `valid` is alive + valid of the poll camera. Its average-rate check is ignored, because it measured this
     loop: at 100 ms per inline HBA frame the loop fell to ~9 Hz, `valid` went false, and card dropped the low beam too.
   - It runs in mode 1 (shadow) and mode 3. It needs `calStatus == calibrated`, `modelV2` within 5 frames of the image, and `carState` alive.
+  - It also gets `livePose.angularVelocityDevice` (gyro, for tracking and pitch), `starpilotCarState.highBeamOn` (the
+    reflector cue) and `mapdOut.speedLimit` (the town gate). Without them it runs as before: no compensation, no beam
+    cue, town from streetlights only.
   - `hbaValid` drops 0.3 s after the last processed frame, or at once if the worker thread died.
 - **Process:** `PythonProcess("lightd", ..., run_lightd, nice=10)`. It runs onroad when `volkswagen_lightd_mode >= 1`,
   and that toggle is only non-zero on PQ cars.
@@ -329,6 +435,8 @@ starpilot/system/lightd/
   hba.py           HbaClassifier (pure + cv2)
   solar.py         NOAA sun position
   tools/replay_lightd.py
+  tools/replay_hba.py     HBA over logged video, hand-label scoring, annotated frames
+  tools/bench_hba.py      per-stage timing on the device
 starpilot/system/tests/test_lightd_{ambient,hba,solar}.py
 opendbc/car/volkswagen/fla.py (+ tests/test_volkswagen_fla.py)
 ```

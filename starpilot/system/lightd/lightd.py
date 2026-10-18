@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 import cereal.messaging as messaging
-from cereal import log
+from cereal import custom, log
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.starpilot.system.lightd.ambient import AmbientEstimator, CameraSample
@@ -54,6 +54,12 @@ def model_dict(md):
     "edges": [xyz(edge) for edge in md.roadEdges],
     "leads": [(lead.prob, lead.x[0], lead.y[0]) for lead in md.leadsV3 if len(lead.x)],
   }
+
+
+def mapd_speed_limit(mapd) -> float:
+  """mapd's posted limit (m/s) for the way it matched us to, 0 when it only guesses the way or has no limit."""
+  matched = mapd.waySelectionType in (custom.WaySelectionType.current, custom.WaySelectionType.extended)
+  return float(mapd.speedLimit) if matched else 0.0
 
 
 class SolarTracker:
@@ -97,6 +103,9 @@ class HbaContext:
   model_alive: bool
   car_alive: bool
   v_ego: float
+  high_beam_on: bool | None = None          # our high beam as the car reports it (TT: Gate_Komf_1), for the reflector cue
+  ang_vel: tuple[float, float, float] | None = None  # livePose device-frame angular velocity, rad/s
+  speed_limit: float | None = None          # mapd posted limit, m/s, for the town gate
 
 
 @dataclass
@@ -156,7 +165,8 @@ class HbaRunner:
     valid = bool(calibrated and model_fresh and ctx.car_alive)
     height = calib.height[0] if len(calib.height) else 1.22
     out = self.clf.update(ctx.now, frame, model_dict(md) if valid else None, list(calib.rpyCalib) if calibrated else None,
-                          height, ctx.v_ego, dark=ctx.dark, valid=valid)
+                          height, ctx.v_ego, dark=ctx.dark, valid=valid, high_beam_on=ctx.high_beam_on, ang_vel=ctx.ang_vel,
+                          speed_limit=ctx.speed_limit)
     self.last_run = ctx.now
     self.last_frame_id = int(frame_id)
     return HbaResult(ctx.now, out, self.last_frame_id, (time.monotonic() - t0) * 1e3)
@@ -223,7 +233,7 @@ class LightD:
     # No average-rate check on the poll service: it would measure this loop, not the cameras. Camera freshness is
     # covered by alive here and by the estimator's frame ages (lowBeamValid); card checks this message's own age.
     return messaging.SubMaster(["wideRoadCameraState", "roadCameraState", self.gps_service, "carState",
-                                "starpilotCarState", "modelV2", "liveCalibration", "starpilotPlan"],
+                                "starpilotCarState", "modelV2", "liveCalibration", "livePose", "starpilotPlan", "mapdOut"],
                                poll=self.poll, ignore_avg_freq=[self.poll])
 
   def step(self, sm, mode: int):
@@ -247,8 +257,12 @@ class LightD:
 
     run_hba = mode in (MODE_SHADOW, MODE_LOW_AND_HIGH_BEAM)
     if run_hba:
+      w = sm["livePose"].angularVelocityDevice
+      ang_vel = (w.x, w.y, w.z) if sm.alive["livePose"] and w.valid else None
+      high_beam = bool(fpcs.highBeamOn) if sm.alive["starpilotCarState"] else None
+      limit = mapd_speed_limit(sm["mapdOut"]) if sm.alive["mapdOut"] else None
       self.hba.submit(HbaContext(now, bool(amb.valid and amb.dark_request), sm["liveCalibration"], sm["modelV2"],
-                                 sm.alive["modelV2"], sm.alive["carState"], sm["carState"].vEgo))
+                                 sm.alive["modelV2"], sm.alive["carState"], sm["carState"].vEgo, high_beam, ang_vel, limit))
     res = self.hba.result()
     fresh = run_hba and self.hba.alive and res is not None and now - res.t < HBA_STALE_S
     ho = res.out if fresh else None

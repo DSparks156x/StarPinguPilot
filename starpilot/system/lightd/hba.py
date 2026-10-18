@@ -4,16 +4,27 @@ Answers one question per narrow-camera frame: may the high beam be on? Everythin
 
 Pipeline:
   1. corridor: project the model's road (lane lines / path, 0..~600 m) into the image, from road level up to
-     lamp height, wide enough for our lane and the oncoming lane. Lights outside it (streetlights, windows)
-     are ignored.
-  2. blobs: bright white (headlights) and red (taillights) connected components inside the corridor.
-  3. tracks: nearest-neighbour association. Distance comes from a lamp-height ground-plane assumption; the
+     lamp height, wide enough for our lane and the oncoming lane. Past the model's horizon it widens with distance,
+     because the road there is a guess. Taillights get one more lane on the far side when the model sees one.
+     Lights outside it (streetlights, windows) are ignored.
+  2. blobs: bright white (headlights) and red (taillights) connected components inside the corridor. Lit yellow
+     and green signs are rejected by colour.
+  3. tracks: nearest-neighbour association, predicted through the gyro's rotation between frames. Distance comes
+     from a lamp-height assumption on the model's road profile, with the camera pitch corrected by the gyro; the
      object's own speed comes from how fast inverse depth changes vs our speed. Roadside reflectors and other
      static lights move like the road (speed ~0), oncoming lamps approach faster than we drive.
-  4. decision: any plausible vehicle dips at once; restoring needs a clear corridor for clear_s.
-     Reasons use the FL1_Abblendursache bits from the PQ35 K-matrix (mFLA_1, 0x65A).
+  4. our own high beam: retroreflectors (delineators, signs) brighten when it switches on and dim when it switches
+     off; lamps don't care. Tracks that follow the switch are reflectors for good.
+  5. decision: any plausible vehicle dips at once; restoring needs a clear corridor for clear_s, which backs off
+     when restores keep getting cut short. Reasons use the FL1_Abblendursache bits from the PQ35 K-matrix
+     (mFLA_1, 0x65A).
+  6. town: streetlights and lit windows (bright, unsaturated, high above the road, outside the corridor) averaged over
+     a few seconds with hysteresis, or a posted limit <= 50 km/h, block the high beam like the speed gate.
+All timing is in seconds, so the result doesn't depend on the rate the worker manages.
 """
+import math
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -22,6 +33,8 @@ import numpy as np
 # doesn't pull in the compiled transformations extension and runs anywhere for offline replay.
 FCAM_W, FCAM_H, FCAM_F = 1344, 760, 1522.0 * 3 / 4
 VIEW_FROM_DEVICE = np.array([[0., 1., 0.], [0., 0., 1.], [1., 0., 0.]])
+FCAM_K = np.array([[FCAM_F, 0.0, FCAM_W / 2], [0.0, FCAM_F, FCAM_H / 2], [0.0, 0.0, 1.0]])
+FCAM_K_INV = np.linalg.inv(FCAM_K)
 
 
 def rot_from_euler(rpy):
@@ -56,12 +69,18 @@ class HbaParams:
   ego_half_width: float = 2.0
   oncoming_width: float = 4.5       # beyond the ego lane on the oncoming side
   far_side_width: float = 1.5
+  adjacent_lane_width: float = 4.0  # extra far-side width for red lights when the model sees a lane there
+  adjacent_lane_prob: float = 0.5
   lamp_low: float = 0.2             # lamp heights above the road
   lamp_high: float = 1.6
   margin_px: int = 10               # calibration / pitch slop
+  beyond_lateral: float = 0.02      # past the model horizon the corridor widens by this many m per m, each side...
+  beyond_vertical: float = 0.01     # ...and grows this many m per m up and down (crests, dips)
   lamp_height: float = 0.7          # for ground-plane distance
   # blobs
   white_y: int = 225
+  white_max_sat: int = 110          # a lit yellow or green sign is bright but saturated; lamp cores are near white
+  sign_hue: tuple = (10, 100)       # OpenCV hue range of those signs (yellow ~25, green ~60)
   red_hue: int = 8                  # OpenCV hue 0..180: red is <= red_hue or >= 180 - red_hue; amber/yellow is 12..35
   red_sat: int = 110
   red_v: int = 70
@@ -70,36 +89,72 @@ class HbaParams:
   max_area: int = 20000
   # tracking
   gate_px: float = 45.0
-  max_missed: int = 3
-  motion_frames: int = 8
-  confirm_frames: int = 8            # weak blobs must persist this long before they dip (= motion_frames, so
-                                     # roadside reflectors are already classified static by then)
-  strong_area: int = 25              # ...unless big or saturated: those dip at once
+  max_missed_s: float = 0.3
+  motion_s: float = 0.7             # window for the motion fit
+  motion_min_obs: int = 5
+  confirm_s: float = 0.4            # weak blobs must persist this long before they dip (roadside reflectors are
+                                    # mostly classified static by then)
+  strong_area: int = 25             # ...unless big or saturated: those dip at once
   strong_peak: int = 250
-  strong_peak_area: int = 16         # small saturated dots are often delineators lit by our beams
+  strong_peak_area: int = 16        # small saturated dots are often delineators lit by our beams
   # far-light vehicle evidence: delineators and porch lights are single dots, vehicles show two lamps on one row
-  pair_max_dx: int = 60              # px between partner lamps
-  pair_dy_frac: float = 0.3          # allowed row offset as a fraction of the separation (+2 px)
+  pair_max_dx: int = 60             # px between partner lamps
+  pair_dy_frac: float = 0.3         # allowed row offset as a fraction of the separation (+2 px)
   pair_area_ratio: float = 4.0
-  wide_ratio: float = 1.8            # w/h of one blob that already is two merged lamps
-  post_ratio: float = 1.5            # h/w of a white blob that is a delineator reflector
-  pair_window: int = 10
+  post_pair_k: float = 5.0          # a tall blob pairs only this close (x its height): far lamps smeared by glare or
+                                    # a wet road look like posts, two posts across the road are much farther apart
+  wide_ratio: float = 1.8           # w/h of one blob that already is two merged lamps
+  post_ratio: float = 1.5           # h/w of a white blob that is a delineator reflector
+  pair_window_s: float = 0.5
   pair_min: int = 2
-  roadside_angle_deg: float = 3.3    # off-path angle on the non-oncoming side beyond which a light is roadside
-                                     # (in-lane vehicles only get there inside ~40 m, where the model lead has them).
-                                     # Angle = lateral / distance, so it survives the unknown lamp height.
-  motion_max_dist: float = 70.0      # beyond this a lamp is a few px below the horizon and 1 px of row is tens of
-                                     # metres, so motion can't classify it; far lights stay candidates (= dip)
-  static_speed: float = 4.0          # |object speed| below this (m/s) after motion_frames: static light
+  big_white_max_lateral: float = 8.0  # a big white light this close to our lane centre may be a car pointing at the
+                                    # road; farther out it's a sign or reflector lit by our beams
+  band_slack: float = 0.5           # a light whose ray is never within lamp_low..lamp_high (+- this) of the road between
+                                    # near_m and far_m is not a lamp: it only got in through the corridor margin
+  sign_frac: float = 1.0            # a blob with more lit yellow/orange pixels around it than its own area is a sign:
+  sign_sat: int = 150               # the red edge of a chevron, or the overexposed white middle of a yellow sign
+  near_band_m: float = 30.0         # a light whose ray is only at lamp height closer than this...
+  near_band_area: int = 80          # ...and is smaller than this is not a lamp: a car that close would be huge
+  roadside_angle_deg: float = 3.3   # off-path angle on the non-oncoming side beyond which a light is roadside
+                                    # (in-lane vehicles only get there inside ~40 m, where the model lead has them).
+                                    # Angle = lateral / distance, so it survives the unknown lamp height.
+  motion_max_dist: float = 70.0     # beyond this a lamp is a few px below the horizon and 1 px of row is tens of
+                                    # metres, so motion can't classify it; far lights stay candidates (= dip)
+  static_vote_s: float = 1.0       # a track that looked static for at least half of this window stays static...
+  static_vote_frac: float = 0.5     # ...unless it shows vehicle evidence (oncoming motion, a strong lamp pair)
+  static_speed: float = 4.0         # |object speed| below this (m/s) after motion_s: static light
   oncoming_speed: float = 5.0
-  min_motion_v_ego: float = 8.0      # below this, motion can't separate static lights from vehicles
+  min_motion_v_ego: float = 8.0     # below this, motion can't separate static lights from vehicles
+  # gyro
+  pitch_hp_s: float = 1.5           # high-pass on integrated pitch/yaw: bumps are corrected, calibration keeps the rest
+  # our own high beam
+  beam_before_s: float = 0.4        # flux before a switch...
+  beam_after_s: tuple = (0.15, 0.6)  # ...vs after it (the bi-xenon flap and CAN delay)
+  beam_ratio: float = 1.8           # a reflector brightens at least this much when the high beam comes on
+  beam_born_s: float = 0.4          # an unpaired light that first shows up this soon after switching on is a reflector
   # decision
   lead_prob: float = 0.5
   lead_max_x: float = 400.0
-  dip_frames: int = 2
+  dip_s: float = 0.08               # threat on two frames in a row
   clear_s: float = 2.0
+  clear_max_s: float = 8.0          # restore backoff: each restore cut short within short_permit_s doubles clear_s
+  short_permit_s: float = 3.0
+  backoff_reset_s: float = 10.0     # this long permitted resets the backoff
   enable_v: float = 60 / 3.6
   disable_v: float = 50 / 3.6
+  # town: streetlights and lit windows, i.e. bright unsaturated lights high above the road outside the corridor.
+  # Above the row of a point town_height over the road town_ref_m out, a light is higher than that or nearer.
+  town_height: float = 3.0
+  town_ref_m: float = 150.0
+  town_y: int = 180
+  town_max_sat: int = 110           # lit yellow signs and red lamps are saturated...
+  town_sign_hue: tuple = (38, 100)  # ...green guide signs less so, but they're green
+  town_sign_sat: int = 35
+  town_window_s: float = 4.0        # mean lights per frame over this window...
+  town_on: float = 2.0              # ...enters town (c9: a mountain town peaks at 6.6, the open road at 1.0, one yard light)
+  town_off: float = 0.5             # ...and leaves it after town_exit_s below this
+  town_exit_s: float = 10.0
+  town_limit: float = 50 / 3.6 + 0.5  # a posted limit at or under 50 km/h is town too
 
 
 @dataclass
@@ -110,39 +165,69 @@ class Blob:
   peak_y: int
   red: bool
   bbox: tuple
+  flux: float = 0.0     # sum of Y above the dark background over the blob's box
+  sat: int = 0          # median HSV saturation / hue of its pixels
+  hue: int = 0
   paired: bool = False  # has a same-colour partner on its row, or is a wide blob (two lamps merged)
-  post: bool = False    # tall white rectangle: delineator reflector, not a lamp
+  post: bool = False    # tall white rectangle without a partner: delineator reflector, not a lamp
+
+
+class Obs(NamedTuple):
+  t: float
+  u: float
+  v: float
+  dist: float
+  lateral: float
+  area: int
+  red: bool
+  peak: int
+  angle: float
+  paired: bool
+  post: bool
+  flux: float
+  sat: int
+  high: bool    # its ray never passes through the lamp band over the road (or only right next to us, and the blob
+                # is small): building, sign, streetlight
 
 
 @dataclass
 class Track:
   tid: int
-  hist: list = field(default_factory=list)  # (t, u, v, dist, lateral, area, red, peak, angle_deg, paired, post)
+  hist: list = field(default_factory=list)  # Obs
   missed: int = 0
   kind: str = KIND_CANDIDATE
   obj_speed: float = float("nan")
   lateral: float = float("nan")
   dist: float = float("nan")
-  age: int = 0
+  first_t: float = 0.0
+  reflector: bool = False       # followed our high beam switching: retroreflector
+  why: str = ""                 # the rule that set kind, for replay and debugging
+  votes: list = field(default_factory=list)  # (t, a static rule fired)
+  pred: tuple | None = None     # (u, v) predicted for the next frame
+
+  @property
+  def age_s(self):
+    return self.hist[-1].t - self.first_t
 
   @property
   def red_frac(self):
-    return sum(h[6] for h in self.hist) / len(self.hist)
+    return sum(h.red for h in self.hist) / len(self.hist)
 
   def strong(self, p):
-    area, peak = self.hist[-1][5], self.hist[-1][7]
-    return area >= p.strong_area or (peak >= p.strong_peak and area >= p.strong_peak_area)
+    o = self.hist[-1]
+    return o.area >= p.strong_area or (o.peak >= p.strong_peak and o.area >= p.strong_peak_area)
 
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
       return False
     if self.strong(p):
       return True
-    if self.age < p.confirm_frames:
+    if self.age_s < p.confirm_s:
       return False
     # far lights (no usable motion) must look like a vehicle: a lamp pair, not a lone delineator or porch light
     far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
-    return not far or sum(h[9] for h in self.hist[-p.pair_window:]) >= p.pair_min
+    recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
+    return not far or sum(h.paired for h in recent) >= p.pair_min
 
 
 @dataclass
@@ -156,6 +241,9 @@ class HbaOut:
   n_preceding: int = 0
   n_candidates: int = 0
   lead_prob: float = 0.0
+  clear_needed_s: float = 0.0
+  town: bool = False
+  town_lights: float = 0.0  # mean town lights per frame over town_window_s
 
 
 class Geometry:
@@ -163,10 +251,9 @@ class Geometry:
 
   def __init__(self, rpy_calib, height):
     self.w, self.h = FCAM_W, FCAM_H
-    self.K = np.array([[FCAM_F, 0.0, FCAM_W / 2], [0.0, FCAM_F, FCAM_H / 2], [0.0, 0.0, 1.0]])
+    self.K, self.K_inv = FCAM_K, FCAM_K_INV
     self.view_from_calib = VIEW_FROM_DEVICE @ rot_from_euler(rpy_calib)
     self.calib_from_view = self.view_from_calib.T
-    self.K_inv = np.linalg.inv(self.K)
     self.height = height
 
   def project(self, pts):
@@ -184,23 +271,60 @@ class Geometry:
     s = z_plane / d[2]
     return s * d[0], s * d[1]
 
+  def ray_heights(self, u, v, center):
+    """Height above the model's road profile (center: x, y, z rows) of the pixel's ray at x = 1 m and at each
+    center x, plus the ray direction. None if the ray doesn't point forward."""
+    d = self.calib_from_view @ (self.K_inv @ np.array([u, v, 1.0]))
+    if d[0] <= 1e-3:
+      return None
+    # the road under the car is a camera height down; center starts at near_m
+    xs = np.concatenate([[1.0], center[:, 0]])
+    z = np.interp(xs, np.concatenate([[0.0], center[:, 0]]), np.concatenate([[self.height], center[:, 2]]))
+    return xs, z - xs * d[2] / d[0], d
+
+  def ray_to_road(self, u, v, center, above, heights=None):
+    """Where the pixel's ray first passes `above` m over the road profile, from below or from above (an uphill road
+    puts lamps above the camera horizon). Returns (x, y), or None if it never does out to the profile's end."""
+    rh = heights or self.ray_heights(u, v, center)
+    if rh is None:
+      return None
+    xs, h, d = rh
+    f = h - above
+    hit = np.nonzero(np.signbit(f[:-1]) != np.signbit(f[1:]))[0]
+    if not len(hit):
+      return None
+    i = hit[0]
+    x = xs[i] + (xs[i + 1] - xs[i]) * f[i] / (f[i] - f[i + 1])
+    return x, x * d[1] / d[0]
+
   def horizon_row(self):
     uv, _ = self.project(np.array([[1000.0, 0.0, 0.0]]))
     return uv[0, 1]
 
 
-def road_centerline(model, p: HbaParams):
-  """(x, y, z_road) samples of our lane centre from near_m to far_m, z_road relative to model z (add height later)."""
+def rotate_pixel(u, v, r_rel):
+  """Where a very distant point at pixel (u, v) appears after the device rotated by r_rel (device frame)."""
+  ray = VIEW_FROM_DEVICE @ (r_rel.T @ (VIEW_FROM_DEVICE.T @ (FCAM_K_INV @ np.array([u, v, 1.0]))))
+  if ray[2] <= 1e-3:
+    return u, v
+  uv = FCAM_K @ (ray / ray[2])
+  return uv[0], uv[1]
+
+
+def road_centerline(model, p: HbaParams, height):
+  """(x, y, z_road, beyond) samples of our lane centre from near_m to far_m. z_road is the road surface in the calib
+  frame (down from the camera): lane lines are on the road already, the plan position is the device's own path, so it
+  needs the camera height. beyond: metres past the model's horizon, 0 inside it."""
   lanes, probs = model["lanes"], model["lane_probs"]
   if len(lanes) >= 3 and min(probs[1], probs[2]) > 0.3:
     l, r = lanes[1], lanes[2]
     pts = np.column_stack([l[:, 0], (l[:, 1] + r[:, 1]) / 2, (l[:, 2] + r[:, 2]) / 2])
   else:
-    pts = model["position"]
+    pts = model["position"] + np.array([0.0, 0.0, height])
   pts = pts[np.argsort(pts[:, 0])]
   pts = pts[pts[:, 0] > 1.0]
   if len(pts) < 3:
-    pts = np.array([[5.0, 0.0, 0.0], [50.0, 0.0, 0.0]])
+    pts = np.array([[5.0, 0.0, height], [50.0, 0.0, height]])
   xs = np.concatenate([np.geomspace(p.near_m, max(p.near_m + 1, pts[-1, 0]), 24),
                        np.geomspace(pts[-1, 0] + 5, p.far_m, 10)])
   ys = np.interp(xs, pts[:, 0], pts[:, 1])
@@ -209,21 +333,31 @@ def road_centerline(model, p: HbaParams):
   tail = pts[-min(6, len(pts)):]
   slope_y = np.polyfit(tail[:, 0], tail[:, 1], 1)[0] if len(tail) > 1 else 0.0
   slope_z = np.polyfit(tail[:, 0], tail[:, 2], 1)[0] if len(tail) > 1 else 0.0
-  beyond = xs > pts[-1, 0]
-  ys[beyond] = pts[-1, 1] + slope_y * (xs[beyond] - pts[-1, 0])
-  zs[beyond] = pts[-1, 2] + slope_z * (xs[beyond] - pts[-1, 0])
-  return np.column_stack([xs, ys, zs])
+  beyond = np.maximum(xs - pts[-1, 0], 0.0)
+  out = beyond > 0
+  ys[out] = pts[-1, 1] + slope_y * beyond[out]
+  zs[out] = pts[-1, 2] + slope_z * beyond[out]
+  return np.column_stack([xs, ys, zs, beyond])
 
 
-def corridor_mask(geom: Geometry, center, p: HbaParams):
+def adjacent_far_lane(model, p: HbaParams):
+  """The model sees a lane line beyond ours on the far (non-oncoming) side: there's a lane for same-direction traffic."""
+  probs = model["lane_probs"]
+  i = 3 if p.oncoming_side < 0 else 0
+  return len(probs) == 4 and probs[i] > p.adjacent_lane_prob
+
+
+def corridor_mask(geom: Geometry, center, p: HbaParams, far_extra=0.0):
   mask = np.zeros((geom.h, geom.w), np.uint8)
-  left = p.ego_half_width + (p.oncoming_width if p.oncoming_side < 0 else p.far_side_width)
-  right = p.ego_half_width + (p.oncoming_width if p.oncoming_side > 0 else p.far_side_width)
+  far_side = p.far_side_width + far_extra
+  left = p.ego_half_width + (p.oncoming_width if p.oncoming_side < 0 else far_side)
+  right = p.ego_half_width + (p.oncoming_width if p.oncoming_side > 0 else far_side)
   corners = []
-  for x, y, z in center:
-    zr = z + geom.height
-    corners.append([(x, y - left, zr - p.lamp_low), (x, y + right, zr - p.lamp_low),
-                    (x, y - left, zr - p.lamp_high), (x, y + right, zr - p.lamp_high)])
+  for x, y, z, beyond in center:
+    zr = z
+    wl, wz = p.beyond_lateral * beyond, p.beyond_vertical * beyond
+    corners.append([(x, y - left - wl, zr - p.lamp_low + wz), (x, y + right + wl, zr - p.lamp_low + wz),
+                    (x, y - left - wl, zr - p.lamp_high - wz), (x, y + right + wl, zr - p.lamp_high - wz)])
   corners = np.array(corners)  # N x 4 x 3
   uv, valid = geom.project(corners.reshape(-1, 3))
   uv, valid = uv.reshape(-1, 4, 2), valid.reshape(-1, 4)
@@ -261,14 +395,16 @@ class Nv12Frame:
     return bgr[y - y0:y - y0 + h, x - x0:x - x0 + w]
 
 
-def find_blobs(frame, mask, p: HbaParams):
-  """frame: BGR array or Nv12Frame."""
+def find_blobs(frame, mask, p: HbaParams, red_mask=None):
+  """frame: BGR array or Nv12Frame. red_mask: a wider corridor for taillights (None: the same one)."""
   # only the corridor's bounding box is converted and labelled; it is a band of ~100-200 rows, not the whole frame
-  ox, oy, cw, ch = cv2.boundingRect(mask)
+  union = mask if red_mask is None else cv2.bitwise_or(mask, red_mask)
+  ox, oy, cw, ch = cv2.boundingRect(union)
   if cw == 0 or ch == 0:
     return []
   crop = frame.crop_bgr(ox, oy, cw, ch) if isinstance(frame, Nv12Frame) else frame[oy:oy + ch, ox:ox + cw]
-  blobs = find_blobs_in(crop, mask[oy:oy + ch, ox:ox + cw], p)
+  rm = None if red_mask is None else red_mask[oy:oy + ch, ox:ox + cw]
+  blobs = find_blobs_in(crop, mask[oy:oy + ch, ox:ox + cw], p, rm)
   for b in blobs:
     b.u += ox
     b.v += oy
@@ -289,7 +425,7 @@ def components(m):
   return n, stats, cents + (x0, y0)
 
 
-def find_blobs_in(bgr, mask, p: HbaParams):
+def find_blobs_in(bgr, mask, p: HbaParams, red_mask=None):
   y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
   hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
   val = hsv[..., 2]
@@ -297,7 +433,8 @@ def find_blobs_in(bgr, mask, p: HbaParams):
   white = cv2.bitwise_and(cv2.threshold(y, p.white_y - 1, 255, cv2.THRESH_BINARY)[1], mask)
   # taillights: saturated red; yellow signs, amber reflectors and warm windows have hue ~12..35
   red = cv2.bitwise_and(cv2.inRange(hsv, (0, p.red_sat, p.red_v), (p.red_hue, 255, 255)) |
-                        cv2.inRange(hsv, (180 - p.red_hue, p.red_sat, p.red_v), (255, 255, 255)), mask)
+                        cv2.inRange(hsv, (180 - p.red_hue, p.red_sat, p.red_v), (255, 255, 255)),
+                        mask if red_mask is None else red_mask)
   blobs = []
   for m, is_red in ((white, False), (red, True)):
     n, stats, cents = components(m)
@@ -306,13 +443,25 @@ def find_blobs_in(bgr, mask, p: HbaParams):
       if not (p.min_area <= area <= p.max_area):
         continue
       x0, y0, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
-      peak = int(y[y0:y0 + h, x0:x0 + w].max())
+      box_y = y[y0:y0 + h, x0:x0 + w]
+      peak = int(box_y.max())
+      lit = m[y0:y0 + h, x0:x0 + w] > 0
+      box_hsv = hsv[y0:y0 + h, x0:x0 + w][lit]
+      sat, hue = int(np.median(box_hsv[:, 1])), int(np.median(box_hsv[:, 0]))
       if is_red:
         # look one blob-size around: a taillight's red halo surrounds a near-white core
         pad = max(w, h)
         if int(val[max(0, y0 - pad):y0 + h + pad, max(0, x0 - pad):x0 + w + pad].max()) < p.red_peak_v:
           continue
-      blobs.append(Blob(float(cents[i, 0]), float(cents[i, 1]), area, peak, is_red, (x0, y0, w, h)))
+      elif sat > p.white_max_sat and p.sign_hue[0] <= hue <= p.sign_hue[1]:
+        continue  # a yellow or green sign lit by our beams
+      # lots of saturated yellow right next to it: the red edge of a chevron, the overexposed middle of a yellow sign
+      pad = max(w, h, 2)
+      around = hsv[max(0, y0 - pad):y0 + h + pad, max(0, x0 - pad):x0 + w + pad]
+      if cv2.countNonZero(cv2.inRange(around, (p.red_hue + 3, p.sign_sat, 150), (35, 255, 255))) > p.sign_frac * area:
+        continue
+      flux = float(np.clip(y[max(0, y0 - 1):y0 + h + 1, max(0, x0 - 1):x0 + w + 1].astype(np.int32) - 16, 0, None).sum())
+      blobs.append(Blob(float(cents[i, 0]), float(cents[i, 1]), area, peak, is_red, (x0, y0, w, h), flux, sat, hue))
 
   # a taillight's saturated core also passes the white test; keep only the red blob around it
   def inside_red(b):
@@ -329,18 +478,53 @@ def find_blobs_in(bgr, mask, p: HbaParams):
     a.post = not a.red and a.bbox[3] >= 3 and a.bbox[3] >= p.post_ratio * a.bbox[2]
   for i, a in enumerate(blobs):
     w, h = a.bbox[2], a.bbox[3]
-    if a.post:
-      continue
     partners = 0
     for j, b in enumerate(blobs):
-      if i == j or a.red != b.red or b.post:
+      if i == j or a.red != b.red:
         continue
       dx, dy = abs(a.u - b.u), abs(a.v - b.v)
-      if 2 <= dx <= p.pair_max_dx and dy <= 2 + p.pair_dy_frac * dx and max(a.area, b.area) <= p.pair_area_ratio * min(a.area, b.area):
+      max_dx = p.pair_max_dx
+      if a.post or b.post:
+        max_dx = min(max_dx, p.post_pair_k * max(a.bbox[3], b.bbox[3]))
+      if 2 <= dx <= max_dx and dy <= 2 + p.pair_dy_frac * dx and max(a.area, b.area) <= p.pair_area_ratio * min(a.area, b.area):
         partners += 1
     # exactly one partner: a lamp pair. Two or more: a row of house/street lights or a delineator chain.
-    a.paired = partners == 1 or (partners == 0 and w >= 3 and w >= p.wide_ratio * h)
+    a.paired = partners == 1 or (partners == 0 and not a.post and w >= 3 and w >= p.wide_ratio * h)
+  for a in blobs:
+    a.post = a.post and not a.paired
   return blobs
+
+
+def town_lights(frame, geom: Geometry, center, mask, p: HbaParams):
+  """Streetlights and lit windows in this frame: bright, unsaturated lights outside the corridor and above the row of
+  a point town_height over the road town_ref_m out. A vehicle's lamps are in the corridor or below that row; lit signs
+  that get above it (near ones) are yellow or green."""
+  x = p.town_ref_m
+  pt = (x, np.interp(x, center[:, 0], center[:, 1]), np.interp(x, center[:, 0], center[:, 2]) - p.town_height)
+  uv, ok = geom.project(np.array([pt]))
+  rows = int(min(uv[0, 1], geom.h)) & ~1 if ok[0] else 0
+  if rows <= 0:
+    return 0
+  y = frame.y[:rows] if isinstance(frame, Nv12Frame) else cv2.cvtColor(frame[:rows], cv2.COLOR_BGR2GRAY)
+  # lights are spread over the whole band, so labelling it is the cost: label a 2x2 max-pooled copy (a light's peak
+  # survives it), then measure each light at full resolution
+  w2 = y.shape[1] & ~1
+  small = np.maximum(np.maximum(y[0::2, 0:w2:2], y[1::2, 0:w2:2]), np.maximum(y[0::2, 1:w2:2], y[1::2, 1:w2:2]))
+  lit = cv2.subtract(cv2.threshold(small, p.town_y - 1, 255, cv2.THRESH_BINARY)[1], mask[:rows:2, :w2:2])
+  n, stats, _ = components(lit)
+  count = 0
+  for i in range(1, n):
+    x0, y0, w, h = (2 * int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+    on = y[y0:y0 + h, x0:x0 + w] >= p.town_y
+    if np.count_nonzero(on) < p.min_area:
+      continue
+    bgr = frame.crop_bgr(x0, y0, w, h) if isinstance(frame, Nv12Frame) else frame[y0:y0 + h, x0:x0 + w]
+    px = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[on]
+    sat, hue = int(np.median(px[:, 1])), int(np.median(px[:, 0]))
+    if sat > p.town_max_sat or (p.town_sign_hue[0] <= hue <= p.town_sign_hue[1] and sat > p.town_sign_sat):
+      continue
+    count += 1
+  return count
 
 
 class HbaClassifier:
@@ -348,22 +532,34 @@ class HbaClassifier:
     self.p = p or HbaParams()
     self.tracks: list[Track] = []
     self._next_id = 0
-    self._threat_frames = 0
+    self._threat_since: float | None = None
     self._clear_since: float | None = None
     self._speed_ok = False
     self._permitted = False
+    self._permit_since: float | None = None
+    self._clear_needed = self.p.clear_s
+    self._last_t: float | None = None
+    self._rot_hp = np.zeros(3)                # high-passed device rotation since calibration (rad)
+    self._beam: bool | None = None
+    self._beam_switches: list[tuple[float, bool]] = []  # (t, on) of recent switches of our high beam
+    self._adjacent = False
+    self._town_hist: list[tuple[float, int]] = []  # (t, town lights in that frame)
+    self._town = False
+    self._town_low_since: float | None = None
     self.last_mask = None
     self.last_blobs: list[Blob] = []
 
-  def _associate(self, t, blobs, geom, center):
+  def _associate(self, t, blobs, geom, center, r_rel):
     p = self.p
     unmatched = list(range(len(blobs)))
     for tr in self.tracks:
-      _, pu, pv, *_ = tr.hist[-1]
+      last = tr.hist[-1]
+      pu, pv = rotate_pixel(last.u, last.v, r_rel) if r_rel is not None else (last.u, last.v)
+      tr.pred = (pu, pv)
       best, best_d = None, p.gate_px
       for j in unmatched:
         b = blobs[j]
-        d = np.hypot(b.u - pu, b.v - pv)
+        d = math.hypot(b.u - pu, b.v - pv)
         if d < best_d:
           best, best_d = j, d
       if best is None:
@@ -371,76 +567,185 @@ class HbaClassifier:
         continue
       unmatched.remove(best)
       tr.missed = 0
-      tr.age += 1
       tr.hist.append(self._obs(t, blobs[best], geom, center))
-      tr.hist = tr.hist[-30:]
+      tr.hist = [h for h in tr.hist[-40:] if h.t >= t - 4.0]
+    born = self._beam_switches and self._beam_switches[-1][1] and t - self._beam_switches[-1][0] <= p.beam_born_s
     for j in unmatched:
-      tr = Track(self._next_id, [self._obs(t, blobs[j], geom, center)], age=1)
+      b = blobs[j]
+      tr = Track(self._next_id, [self._obs(t, b, geom, center)], first_t=t)
+      # our high beam just came on and a lone light appeared with it: a reflector it lit up
+      tr.reflector = bool(born and not b.paired)
       self._next_id += 1
       self.tracks.append(tr)
-    self.tracks = [tr for tr in self.tracks if tr.missed <= p.max_missed]
+    self.tracks = [tr for tr in self.tracks if t - tr.hist[-1].t <= p.max_missed_s]
 
   def _obs(self, t, b: Blob, geom: Geometry, center):
-    hit = geom.ray_to_plane(b.u, b.v, geom.height - self.p.lamp_height)
+    p = self.p
+    rh = geom.ray_heights(b.u, b.v, center)
+    hit = geom.ray_to_road(b.u, b.v, center, p.lamp_height, rh)
     if hit is None or hit[0] <= 0 or hit[0] > 2000:
-      dist = lateral = angle = float("nan")  # at or above the horizon: far away, or not a lamp at all
+      # above the lamp surface all the way out: very far (then it's near the road's far end), or not a lamp at all.
+      # angle is the bearing from that far end instead.
+      dist = lateral = angle = float("nan")
     else:
       dist = hit[0]
       lateral = hit[1] - np.interp(dist, center[:, 0], center[:, 1])
-      angle = np.degrees(np.arctan2(lateral, dist))
-    return (t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post)
+      angle = math.degrees(math.atan2(lateral, dist))
+    high = False
+    if rh is not None:
+      in_band = (rh[1][1:] >= p.lamp_low - p.band_slack) & (rh[1][1:] <= p.lamp_high + p.band_slack)
+      high = not in_band.any() or (b.area < p.near_band_area and center[in_band, 0].max() < p.near_band_m)
+    return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high)
 
-  def _classify(self, tr: Track, v_ego):
+  def _beam_check(self, tr: Track):
+    """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
     p = self.p
-    h = np.array([x[:6] for x in tr.hist], dtype=float)
-    tr.dist, tr.lateral = h[-1, 3], h[-1, 4]
+    for ts, on in self._beam_switches:
+      before = [h.flux for h in tr.hist if ts - p.beam_before_s <= h.t < ts]
+      after = [h.flux for h in tr.hist if ts + p.beam_after_s[0] <= h.t <= ts + p.beam_after_s[1]]
+      if not before or not after:
+        continue
+      ratio = (np.median(after) + 1.0) / (np.median(before) + 1.0)
+      if (ratio >= p.beam_ratio) if on else (ratio <= 1.0 / p.beam_ratio):
+        tr.reflector = True
+
+  def _classify(self, tr: Track, v_ego, center):
+    """Per-frame rules, then a vote over the last static_vote_s: single frames flip between rules (a far sign is
+    a post on one frame and a lone light on the next), and each flip to a threat would dip the beam."""
+    p = self.p
+    self._classify_frame(tr, v_ego, center)
+    t = tr.hist[-1].t
+    tr.votes = [v for v in tr.votes if v[0] >= t - p.static_vote_s] + [(t, tr.kind == KIND_STATIC)]
+    vehicle = tr.kind == KIND_ONCOMING or (tr.strong(p) and tr.hist[-1].paired)
+    if (tr.kind != KIND_STATIC and not vehicle and len(tr.votes) >= 3
+        and sum(v[1] for v in tr.votes) >= p.static_vote_frac * len(tr.votes)):
+      tr.kind, tr.why = KIND_STATIC, "vote"
+
+  def _classify_frame(self, tr: Track, v_ego, center):
+    p = self.p
+    last = tr.hist[-1]
+    tr.dist, tr.lateral = last.dist, last.lateral
     red = tr.red_frac > 0.5
+    any_red = red or last.red
+    if not tr.reflector and self._beam_switches:
+      self._beam_check(tr)
+    if tr.reflector:
+      tr.obj_speed = float("nan")
+      tr.kind, tr.why = KIND_STATIC, "beam"
+      return
     recent = tr.hist[-5:]
-    if not tr.strong(p) and sum(x[10] for x in recent) * 2 > len(recent):
+    if sum(h.post for h in recent) * 2 > len(recent):  # unpaired and tall, however bright: lamps are round or wide
       tr.obj_speed = float("nan")
-      tr.kind = KIND_STATIC  # delineator post
+      tr.kind, tr.why = KIND_STATIC, "post"  # delineator post
       return
-    angles = np.array([x[8] for x in recent], dtype=float)
-    big_white = not red and tr.hist[-1][5] >= p.strong_area  # real headlights pointing at the road (driveway exit)
-    if not big_white and np.isfinite(angles).any() and p.oncoming_side * np.nanmedian(angles) < -p.roadside_angle_deg:
+    if sum(h.high for h in recent) * 2 > len(recent):
       tr.obj_speed = float("nan")
-      tr.kind = KIND_STATIC  # roadside on our side: reflectors, parked cars, driveway markers
+      tr.kind, tr.why = KIND_STATIC, "high"  # above lamp height, off the far road: building, sign, streetlight
       return
-    seg = h[-p.motion_frames:]
-    if (len(h) >= p.motion_frames and v_ego >= p.min_motion_v_ego and np.isfinite(seg[:, 3]).all()
-        and seg[:, 3].max() < p.motion_max_dist):
-      inv = 1.0 / np.clip(seg[:, 3], 1.0, 2000.0)
-      slope = np.polyfit(seg[:, 0] - seg[0, 0], inv, 1)[0]   # d(1/d)/dt = closing / d^2
+    angles = np.array([h.angle for h in recent], dtype=float)
+    near_lane = np.isfinite(last.lateral) and abs(last.lateral) < p.big_white_max_lateral
+    big_white = not red and last.area >= p.strong_area and near_lane  # real headlights pointing at the road (driveway)
+    # red lights on the far side: far out they're taillights on a curve the model's path lags; with a lane there
+    # they're cars in it. Close by on a road without one they're parked cars and reflectors.
+    near = np.isfinite(last.dist) and last.dist < p.motion_max_dist
+    exempt = big_white or (any_red and (self._adjacent or not near))
+    if not exempt and np.isfinite(angles).any() and p.oncoming_side * np.nanmedian(angles) < -p.roadside_angle_deg:
+      tr.obj_speed = float("nan")
+      tr.kind, tr.why = KIND_STATIC, "roadside"  # roadside on our side: reflectors, parked cars, driveway markers
+      return
+    seg = [h for h in tr.hist if h.t >= last.t - p.motion_s]
+    dists = np.array([h.dist for h in seg])
+    if (len(seg) >= p.motion_min_obs and seg[-1].t - seg[0].t >= 0.5 * p.motion_s and v_ego >= p.min_motion_v_ego
+        and np.isfinite(dists).all() and dists.max() < p.motion_max_dist):
+      ts = np.array([h.t for h in seg]) - seg[0].t
+      inv = 1.0 / np.clip(dists, 1.0, 2000.0)
+      slope = np.polyfit(ts, inv, 1)[0]   # d(1/d)/dt = closing / d^2
       closing = slope * tr.dist ** 2
-      tr.obj_speed = closing - v_ego                           # >0: coming at us, ~0: static, <0: moving away
+      tr.obj_speed = closing - v_ego      # >0: coming at us, ~0: static, <0: moving away
+      tr.why = "motion"
       if abs(tr.obj_speed) < p.static_speed:
         tr.kind = KIND_STATIC      # moves with the road: reflector, sign, parked car, house light
       elif tr.obj_speed > p.oncoming_speed and not red:
         tr.kind = KIND_ONCOMING
-      elif tr.obj_speed < 0 or red:
+      elif red:
         tr.kind = KIND_PRECEDING
+      elif tr.obj_speed < 0:
+        # a white light "moving away" sits lower than a lamp: raised pavement markers, low reflectors
+        tr.kind = KIND_STATIC
       else:
         tr.kind = KIND_CANDIDATE
     else:
       tr.obj_speed = float("nan")
-      tr.kind = KIND_PRECEDING if red else KIND_CANDIDATE
+      tr.kind, tr.why = (KIND_PRECEDING if red else KIND_CANDIDATE), "colour"
 
-  def update(self, t, frame, model, rpy_calib, height, v_ego, dark=True, valid=True) -> HbaOut:
-    """frame: the narrow-camera image, BGR array or Nv12Frame."""
+  def _ego_rotation(self, t, ang_vel):
+    """Device rotation since the last frame (for association) and the high-passed rotation since calibration
+    (bumps, for the projection). None, zeros without gyro."""
+    dt = 0.0 if self._last_t is None else min(max(t - self._last_t, 0.0), 0.5)
+    self._last_t = t
+    if ang_vel is None or dt == 0.0:
+      self._rot_hp[:] = 0.0
+      return None
+    w = np.asarray(ang_vel, dtype=float)
+    self._rot_hp = (self._rot_hp + w * dt) * math.exp(-dt / self.p.pitch_hp_s)
+    return cv2.Rodrigues(w * dt)[0]
+
+  def _beam_update(self, t, high_beam_on):
+    if high_beam_on is None:
+      return
+    if self._beam is not None and high_beam_on != self._beam:
+      self._beam_switches.append((t, bool(high_beam_on)))
+    self._beam = bool(high_beam_on)
+    horizon = self.p.beam_after_s[1] + 0.2
+    self._beam_switches = [s for s in self._beam_switches if t - s[0] <= horizon]
+
+  def _town_update(self, t, n, speed_limit):
+    """Town from streetlight density with hysteresis, or from a posted limit. Returns (town, mean lights per frame)."""
+    p = self.p
+    self._town_hist = [h for h in self._town_hist if h[0] > t - p.town_window_s] + [(t, n)]
+    density = sum(h[1] for h in self._town_hist) / len(self._town_hist)
+    full = t - self._town_hist[0][0] >= 0.5 * p.town_window_s  # one bright frame after a reset is no town
+    if density >= p.town_on and full:
+      self._town = True
+      self._town_low_since = None
+    elif density < p.town_off:
+      if self._town_low_since is None:
+        self._town_low_since = t
+      if t - self._town_low_since >= p.town_exit_s:
+        self._town = False
+    else:
+      self._town_low_since = None
+    limit_town = speed_limit is not None and 0.0 < speed_limit <= p.town_limit
+    return self._town or limit_town, density
+
+  def update(self, t, frame, model, rpy_calib, height, v_ego, dark=True, valid=True, high_beam_on=None,
+             ang_vel=None, speed_limit=None) -> HbaOut:
+    """frame: the narrow-camera image, BGR array or Nv12Frame. high_beam_on: our high beam as the car reports it,
+    None if unknown. ang_vel: device-frame angular velocity (rad/s, livePose), None if unknown. speed_limit: the
+    posted limit (m/s, mapd), None or 0 if unknown."""
     p, out = self.p, HbaOut()
+    r_rel = self._ego_rotation(t, ang_vel)
     if not valid or model is None or rpy_calib is None:
       self._reset()
       out.reason = REASON_FAULT
       return out
-    geom = Geometry(rpy_calib, height)
-    center = road_centerline(model, p)
+    self._beam_update(t, high_beam_on)
+    # the device rotated by _rot_hp since the calibration settled: the calibrated view rotates the other way
+    rpy = np.asarray(rpy_calib, dtype=float) - self._rot_hp
+    geom = Geometry(rpy, height)
+    center = road_centerline(model, p, height)
     mask = corridor_mask(geom, center, p)
-    blobs = find_blobs(frame, mask, p)
+    self._adjacent = adjacent_far_lane(model, p)
+    red_mask = corridor_mask(geom, center, p, p.adjacent_lane_width) if self._adjacent else None
+    blobs = find_blobs(frame, mask, p, red_mask)
     self.last_mask, self.last_blobs, self.last_center, self.last_geom = mask, blobs, center, geom
-    self._associate(t, blobs, geom, center)
+    self._associate(t, blobs, geom, center, r_rel)
+    # by day the sky between the trees is bright and pale too: count only in the dark
+    n_town = town_lights(frame, geom, center, mask, p) if dark else 0
+    out.town, out.town_lights = self._town_update(t, n_town, speed_limit)
     for tr in self.tracks:
       if tr.missed == 0:
-        self._classify(tr, v_ego)
+        self._classify(tr, v_ego, center)
 
     live = [tr for tr in self.tracks if tr.missed == 0 and tr.is_threat(p)]
     out.n_oncoming = sum(tr.kind == KIND_ONCOMING for tr in live)
@@ -449,6 +754,8 @@ class HbaClassifier:
     lead = max(((pr, x) for pr, x, _ in model["leads"]), default=(0.0, 0.0))
     out.lead_prob = lead[0]
     model_lead = lead[0] > p.lead_prob and lead[1] < p.lead_max_x
+    # a threat we're sure of (model lead, a big lamp, oncoming motion) says nothing about the last restore
+    confident = model_lead or any(tr.strong(p) or tr.kind == KIND_ONCOMING for tr in live)
 
     reason = 0
     if out.n_oncoming or out.n_candidates:
@@ -456,7 +763,10 @@ class HbaClassifier:
     if out.n_preceding or model_lead:
       reason |= REASON_PRECEDING
     out.threat = reason != 0
-    self._threat_frames = self._threat_frames + 1 if out.threat else 0
+    if not out.threat:
+      self._threat_since = None
+    elif self._threat_since is None:
+      self._threat_since = t
 
     if v_ego > p.enable_v:
       self._speed_ok = True
@@ -466,18 +776,29 @@ class HbaClassifier:
       reason |= REASON_SPEED
     if not dark:
       reason |= REASON_TOO_BRIGHT
+    if out.town:
+      reason |= REASON_TOWN
 
-    if self._threat_frames >= p.dip_frames or not self._speed_ok or not dark:
+    dip = self._threat_since is not None and t - self._threat_since >= p.dip_s
+    if dip or not self._speed_ok or not dark or out.town:
+      if (self._permitted and dip and not confident and self._permit_since is not None
+          and t - self._permit_since < p.short_permit_s):
+        self._clear_needed = min(2 * self._clear_needed, p.clear_max_s)  # restored too early: wait longer next time
       self._permitted = False
+      self._permit_since = None
       self._clear_since = None
     elif not out.threat:
       if self._clear_since is None:
         self._clear_since = t
       out.clear_for_s = t - self._clear_since
-      if out.clear_for_s >= p.clear_s:
+      if out.clear_for_s >= self._clear_needed and not self._permitted:
         self._permitted = True
+        self._permit_since = t
       elif not self._permitted:
         reason |= REASON_DELAY
+    if self._permitted and t - self._permit_since >= p.backoff_reset_s:
+      self._clear_needed = p.clear_s
+    out.clear_needed_s = self._clear_needed
     out.high_beam_permitted = self._permitted
     out.reason = 0 if self._permitted else reason
     out.valid = True
@@ -485,6 +806,12 @@ class HbaClassifier:
 
   def _reset(self):
     self.tracks = []
-    self._threat_frames = 0
+    self._threat_since = None
     self._clear_since = None
     self._permitted = False
+    self._permit_since = None
+    self._clear_needed = self.p.clear_s
+    self._beam_switches = []
+    self._town_hist = []
+    self._town = False
+    self._town_low_since = None

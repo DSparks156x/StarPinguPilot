@@ -21,7 +21,7 @@ RPY = [0.0, 0.02, 0.01]
 XS = np.linspace(0, 190, 33)
 MODEL = {
   "position": np.column_stack([XS, 0.0004 * XS ** 2, np.zeros(33)]),
-  "lanes": [np.column_stack([XS, 0.0004 * XS ** 2 + y, np.zeros(33)]) for y in (-5.4, -1.8, 1.8, 5.4)],
+  "lanes": [np.column_stack([XS, 0.0004 * XS ** 2 + y, np.full(33, HEIGHT)]) for y in (-5.4, -1.8, 1.8, 5.4)],
   "lane_probs": [0.5, 0.9, 0.9, 0.5],
   "edges": [],
   "leads": [(0.0, 50.0, 0.0)],
@@ -67,7 +67,7 @@ def main():
   frame = Nv12Frame(nv12[:FCAM_H], nv12[FCAM_H:])
   p = HbaParams()
   geom = Geometry(RPY, HEIGHT)
-  center = road_centerline(MODEL, p)
+  center = road_centerline(MODEL, p, HEIGHT)
   mask = corridor_mask(geom, center, p)
   full_mask = mask.copy()
   k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * p.margin_px + 1, 2 * p.margin_px + 1))
@@ -80,7 +80,7 @@ def main():
 
   stages = [
     ("classifier update (all)", whole),
-    ("  corridor mask", lambda: corridor_mask(geom, road_centerline(MODEL, p), p)),
+    ("  corridor mask", lambda: corridor_mask(geom, road_centerline(MODEL, p, HEIGHT), p)),
     ("  blobs (NV12 crop + label)", lambda: find_blobs(frame, mask, p)),
     ("old full-frame NV12->BGR", lambda: cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12)),
     ("old full-frame dilate", lambda: cv2.dilate(full_mask, k)),
