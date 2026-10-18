@@ -337,6 +337,15 @@ class Uploader:
           if dedup_key in already_queued:
             continue
 
+          # Segment still being recorded: uploading now sends a truncated log and
+          # marks it uploaded, so the full file never goes. Leave the request
+          # pending; it gets picked up once loggerd removes the lock.
+          try:
+            if any(name.endswith(".lock") for name in os.listdir(os.path.join(self.root, route))):
+              continue
+          except OSError:
+            continue
+
           # For rlog.zst, also accept the uncompressed rlog on disk — upload() +
           # do_upload() will compress it on the fly via get_upload_stream.
           if file_type == "rlog.zst":
