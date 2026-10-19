@@ -601,6 +601,10 @@ opendbc/car/volkswagen/fla.py (+ tests/test_volkswagen_fla.py)
     then drop out after the comma's first OFF plus the J519 hold. The comma can't win that race. The fix belongs in the J519
     patch: a startup grace window (ignore G397 ON until the first valid comma frame or ~20 s, optionally still accepting G397
     when its code is 0).
+15. **Native changes need a CI rebuild.** The comma runs the committed binaries and loggerd only logs services compiled
+    into it: the upstream-built loggerd silently dropped `starpilotLightState` until the 2026-10-18 rebuild. Changes to
+    `cereal/services.py`, the capnp schema or other native code ship only via `.github/workflows/build_pingu.yaml`; read
+    its header comment, especially after an upstream merge.
 
 ## 10. Order of work
 

@@ -1,6 +1,32 @@
 # StarPinguPilot: build device binaries on GitHub's free ARM runners and push a prebuilt "build" commit.
 # StarPilot's own compile_starpilot.yaml needs the maintainer's self-hosted runner; this uses the same
 # scripts/laptop_device_build.sh flow with a sysroot extracted from the AGNOS system image.
+#
+# READ THIS BEFORE CHANGING NATIVE CODE (C/C++, Cython, capnp, cereal/services.py, SConscript):
+#
+# - The comma can't compile StarPilot (AGNOS has no dev headers). It runs the binaries committed to this branch:
+#   launch_chffrplus.sh only runs ./build when there is no `prebuilt` file, and the tree always has one. A native
+#   change therefore reaches the car only if this workflow rebuilds the binary that contains it and commits it.
+#
+# - A full build is slow, so the default build is an explicit list of targets: BUILD_ARGS in scripts/pingu_ci.py
+#   (params, panda firmware, cereal libs/services.h/bridge, loggerd/encoderd/bootlog). Everything else
+#   (pandad, camerad, modeld/controls/locationd libs, msgq, ...) stays as committed.
+#
+# - The guard step fails the run if native sources changed since the last build-bot commit that the list doesn't
+#   cover (COVERED/IGNORED in scripts/pingu_ci.py: a static path list, checked in milliseconds, before any build).
+#   The fix is either to add the target, or to dispatch this workflow with full_build=true (which skips the guard).
+#   Try it locally: python3 scripts/pingu_ci.py guard <base>..<head>
+#
+# - To add a target: append its scons path (or a ./build flag) to BUILD_ARGS in scripts/pingu_ci.py and add the
+#   source paths it covers to COVERED. Only cover a path if every shipped binary it can change is in the list.
+#
+# - After the build, the verify step fails the run if cereal/services.h doesn't match services.py, or if loggerd
+#   doesn't contain every should_log service (loggerd only logs services compiled into it).
+#
+# - Upstream StarPilot merges bring upstream-built binaries, which don't know fork-only services (starpilotLightState)
+#   or other fork changes. The default list always rebuilds the cereal/loggerd binaries, so those get fixed on the
+#   next push. If the merge also touched native code outside the list, the guard fires: rebuild those targets
+#   (add them, or run full_build=true) before driving with that merge.
 name: Build StarPinguPilot
 
 on:
@@ -9,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       full_build:
-        description: "Full build (default only rebuilds params + panda firmware)"
+        description: "Full build (default only builds the target list in scripts/pingu_ci.py)"
         type: boolean
         default: false
 
@@ -28,9 +54,17 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     steps:
+      # Full history for the guard, but blobless: only commits and trees, file contents for HEAD only
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Guard native sources against the build list
+        if: ${{ inputs.full_build != true }}
+        env:
+          GUARD_FALLBACK_BASE: ${{ github.event.before }}
+        run: python3 scripts/pingu_ci.py guard
 
       # Builder image layers live in the GitHub Actions cache
       - uses: docker/setup-buildx-action@v3
@@ -72,9 +106,12 @@ jobs:
           if [[ "${{ inputs.full_build }}" == "true" ]]; then
             ./build "$(nproc)"
           else
-            ./build --params --panda
+            ./build $(python3 scripts/pingu_ci.py build-args)
           fi
           touch prebuilt
+
+      - name: Verify build output
+        run: python3 scripts/pingu_ci.py verify
 
       - name: Commit and push build output
         run: |
@@ -88,9 +125,15 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -u
           git add -f prebuilt
+          git status --short
           if git diff --cached --quiet; then
-            echo "No build output changes."
-            exit 0
+            if [[ "${{ inputs.full_build }}" != "true" ]]; then
+              echo "No build output changes."
+              exit 0
+            fi
+            # A full build always commits, so the guard's base (the last bot commit) moves past what it covered
+            git commit --allow-empty -m "build (full, no changes)"
+          else
+            git commit -m "build"
           fi
-          git commit -m "build"
           git push origin "HEAD:${GITHUB_REF_NAME}"
