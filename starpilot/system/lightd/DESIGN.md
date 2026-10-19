@@ -617,3 +617,336 @@ opendbc/car/volkswagen/fla.py (+ tests/test_volkswagen_fla.py)
 | 3 | DBC + `create_fla_1` + panda TX + mode 2, after a verified byte-0 J519 image is flashed | J519 flash | code done, byte 0 final |
 | 4 | V2 pixel ROIs + tunnel | — | open |
 | 5 | V3 HBA in shadow mode (compare against manual high-beam use), then mode 3 + FLA coding | J519 coding | prototype offline; needs highway night data |
+
+## 11. V4: an HBA that can be measured, then learned (proposed 2026-10-18)
+
+Written after drive 2 (route `0000005a`, HBA_HANDOFF.md §5). Two drives of the rule stack (§5 above) ended the same way:
+the replay numbers improved, the car got worse. Before changing another rule, this section says why, what a production
+HBA actually does, and what to build instead.
+
+### Why the rule stack cannot converge
+
+- **Most tracks are never classified.** On route 5a the replay produced 58k track-frames. 23.7k are `candidate/colour`
+  and 16.7k `preceding/colour`: the fallback when no rule fired, which is "unknown, so dip". Only 168 track-frames were
+  ever `oncoming/motion`, the one rule with real vehicle evidence. The HBA is driven by what it cannot classify.
+- **The decision has no notion of its own effect.** Our high beam lights a retroreflective sign 5-10x brighter; it
+  saturates and blooms, passes every lamp test, is a "strong" track, dips on the first frame, skips the backoff, and the
+  cycle repeats every 2.6 s (§5 of the handoff, seg 24). The glare override then flips tracks already marked reflector.
+  These are not tuning errors: the architecture has no state for "this light exists because I switched on".
+- **There is no metric a rule change can be judged by.** Replay is open loop (the recorded scene was lit by the old
+  decisions), hand labels cover 150 s of dusk, and the "obvious lamp" proxy only catches near blooming lamps. So each
+  pass optimised what it could see, and the car measured something else: toggles per minute 2.24 -> 2.94, median
+  on-time 3.7 s -> 1.9 s, with no oncoming car missed on either drive.
+- **~90 interacting parameters, each introduced for one drive.** That is the signature of fitting, not modelling.
+
+### What the 2010 systems did (Mobileye AHC / Hella / Gentex, as used in VW FLA)
+
+They are not magic, but they had three things this design lacks, and we should copy the two we can:
+
+1. **A camera they controlled.** Alternating or very short exposures so headlights stay unsaturated point sources while
+   reflectors (lit by the car's own beams, falling off ~d^-4) all but vanish; some used a red/clear filter for taillights.
+   We cannot: camerad's exposure serves the driving model. Appearance is therefore our weakest cue, and gates on
+   brightness and bloom ("lamps bloom, reflectors don't") are the ones that fail first under our own high beam.
+2. **A trained spot classifier over tracked features**, not thresholds: colour, size, growth, pair geometry, motion
+   against the ego flow, position relative to the horizon, and a time history. Trained on fleet data with labels.
+3. **A deliberately slow, asymmetric actuator policy.** Dip fast (0.2-0.5 s), restore slowly (seconds), never flash:
+   lights that appear with the restore are suspect by construction, and anything short of vehicle evidence does not dip
+   again at once. Staying dipped at a sign for 5 s is a non-event for the driver; flashing is a defect.
+
+Point 2 and 3 are the design. Point 1 we replace with what they did not have: our own beam state on CAN at 10 ms, the
+driving model's road geometry and leads, a gyro, mapd, and roughly a thousand times their compute.
+
+### Architecture
+
+Three layers with one direction of data flow, and a metric that does not depend on the rules under test.
+
+**A. Candidates and tracks (keep, simplify).** Blob extraction in the road corridor, nearest-neighbour tracking with gyro
+prediction, and track stitching across short gaps (a far lamp flickers; today each gap makes a new `tid` and loses the
+history). Every gate that currently *rejects* a blob (crisp ring, sign colour, post shape, pairing, height) becomes a
+*feature* on the track instead. Rejection happens once, in C, not nine times in sequence.
+
+**B. A learned per-track classifier.** Inputs are per-track temporal features over the last 1-2 s: area, peak, flux
+trend against ego travel, saturation and hue, ring and bloom profile, aspect, pair persistence, image velocity minus the
+predicted static flow (gyro + ego speed + road geometry), angle to the path and its trend, height class from the
+ray, position relative to the model's lanes and leads, and **our beam state: time since the last switch and the flux
+ratio across it**. Output p(vehicle). Model: gradient-boosted trees or a tiny MLP, well under 1 ms for all tracks on
+the A55; a 32x32 patch CNN for appearance is a later option if the features plateau. Training labels come free from
+**hindsight**: a track that resolves at short range (oncoming motion, model lead, passes us as a static roadside light,
+follows our beam switch) labels its whole far history, and stitched tracks carry that label back to 300 m.
+`replay_hba.py` already does a first version of this per `tid`; the labels on 5a are 20k vehicle / 4.7k static /
+33k unknown track-frames, and stitching plus the beam cue should resolve much of the unknown set.
+
+**C. A decision policy that knows what it did.** Dip when the max p(vehicle) over live tracks exceeds a low threshold,
+or a model lead or wide-guard hit; fast. Restore after the corridor has been clear for `clear_s`. Then the two rules
+that stop flashing: (1) tracks born within ~1 s of our own switch-on start with a reflector prior and need vehicle
+evidence (pairing, motion, lead, p above a *high* threshold) to dip again; (2) every re-dip inside `short_permit_s`
+lengthens the next clear time, whatever the confidence, unless the evidence was a lead or a wide hit. Town and speed
+gates stay as they are, but the streetlight town gate only applies below ~70 km/h (nobody drives through a town at 110).
+
+### The metric (build this first, it is needed under any design)
+
+Per drive, three numbers, each computed twice: for the car's logged beam (`GK1_Fernlicht`) and for the replay's permit,
+and the replay numbers conditioned on frames where the recorded beam state equals the replay's, so the open-loop lie is
+at least visible:
+
+1. **glare seconds**: high beam on while a hindsight-vehicle track is live in the corridor (the safety number);
+2. **nuisance seconds**: dipped at speed in the dark with no hindsight vehicle, no lead, no town (the benefit lost);
+3. **toggles per minute and the on-period histogram** (< 1 s, < 2 s) (the defect the driver notices).
+
+Plus the label audit: how many track-frames are still `unknown`, and a sample of chains checked against the JPEGs.
+Hand labels (c9, and whatever the user reports from drives) validate the hindsight labels, not the classifier directly.
+
+### Data: there is very little video with the high beam on
+
+Route 5a has ~5 min of high beam at speed, route 46 ~3.7 min, c9 none. Everything else is low beam. That matters in
+three ways, and the design has to live with it rather than wish it away.
+
+1. **Labels do not need the high beam.** Hindsight resolution (motion at short range, model lead, passing a roadside
+   light, pairing as a car approaches) works under either beam, so the vehicle/static training set comes from all night
+   video. Only the *reflector response to our switching* needs real switches, and every switch we have (about 100 across
+   both drives, half of them the flashes themselves) is a sign lit by the high beam: a small but clean set.
+2. **The classifier must not learn "the scene under low beam".** Appearance features (peak, bloom, ring, saturation)
+   shift when our beam comes on; motion, geometry, colour hue, pairing and time do not. So: beam state and time since the
+   last switch are inputs, appearance features are used with that conditioning, and the leave-one-drive-out test must
+   report the high-beam-on frames separately. If the high-beam-on score is poor, the policy leans on the
+   beam-invariant features there (dip on the unknown, as today) until there is data.
+3. **Get the data cheaply: drive with the stalk, not the HBA.** In shadow mode (`VolkswagenLightdMode` 1) the HBA logs
+   but the J519 ignores it, and the driver works the high beam manually and generously on empty roads. Each manual dip
+   is a driver label "vehicle appeared" (stalk and `GK1_Fernlicht` are on CAN), each long manual on-period is minutes of
+   signs, posts and delineators under the high beam with no vehicle, and the camera sees the closed loop the driver
+   closes. One or two such drives on the usual mountain roads give more high-beam-on video than everything so far, with
+   no risk to anyone's eyes. This needs `starpilotLightState` in the rlogs (the loggerd rebuild) so the shadow decisions
+   can be scored against the driver's.
+4. **Later: mode 3 drives are labels too**, once flashing is gone, because the user's notes ("flashed a sign at X") and
+   every switch become training data. Until then, do not train on mode 3 drives' switches as if they were truth: half of
+   them are the bug.
+
+### Step 1 findings (2026-10-18, `hba_tools/score.py` on routes 5a and 46)
+
+- **The car's nuisance time is 30 % of the dark time at speed on 5a (356 s of 19.7 min) and 24 % on 46**: dipped with
+  no vehicle chain, no lead, no town. The replay understates it by 20-25 % (287 s and 176 s), in the direction the
+  open-loop argument predicts. Conditioning on frames where the recorded beam equals the replay's permit keeps 83-87 %
+  of frames and removes most of the short on-periods from the replay's count: the flashes are mostly closed-loop.
+- **Hindsight "vehicle" labels were mostly receding tracks.** Of the motion-resolved vehicle chains, 5a had 11
+  approaching vs 244 receding, 46 had 22 vs 466; most receding ones are off the lane: delineators lit by the high beam,
+  exactly what `hba.py` itself calls "white moving away = low reflector". The three longest "glare" episodes on 5a were
+  2-15 px dots at 30-70 m on the shoulder. Oncoming cars almost never resolve by motion: they are inside 70 m for under
+  a second and bloom to NaN range before that. So the first glare numbers (8.5 s / 8.7 s) are label noise; without the
+  receding chains they are 2.7 s and 0.9 s, and even those are unaudited. Labels now use the sign and the side, and an
+  oncoming car is resolved by its **pass event** (area explodes, moves to the oncoming edge, wide guard sees it).
+- **Stitching helps less than hoped**: tids to chains 4711 -> 3013 (5a), unknown track-frames down 11 % on 5a and 25 %
+  on 46, median track life 0.2 s -> 0.6 s. Far lights really do flicker in and out at this exposure.
+- **The beam cue reaches few tracks**: only 44 of 130 switches on 5a have any chain with flux on both sides, because the
+  lit sign is born at the switch (the same reason `_beam_check` never fires on the car). The switch-off side is biased
+  (the dip was caused by the track, and every strong blob shrinks when our beam goes off) and is dropped. "Born within
+  a second of our switch-on" is the usable form of the cue, as a feature and as a policy prior.
+- **Oncoming inventory (labels v2, pass events + sign/side motion, audited 14/15 right on each drive):**
+
+  | | 5a | 46 |
+  |---|---|---|
+  | oncoming cars (chains merged within 2 s) | 50, 39 at >= 60 km/h | 85, 53 at >= 60 km/h |
+  | first track before the pass, median (p25-p75) | 8.2 s (3.9-13.0) | 4.3 s (2.0-6.7) |
+  | wide guard saw the lamp within 1 s of the pass | 78 of 94 pass chains | 130 of 157 |
+  | `hba.py` threat on the car's frames, >200 / 120-200 / 70-120 / <70 m | 76 / 74 / 80 / 74 % | 49 / 77 / 87 / 74 % |
+  | logged beam on with a car in view | 1.7 s over 4 cars | 6.0 s over 6 cars |
+  | nuisance (dipped, nothing in view, no town) | 366 s | 265 s |
+
+  The misses are 0.5-0.8 s reaction time at the pass, plus one 2.1 s case on 46 (seg 9 at 50 s) where the replay dipped and
+  the car did not. So the safety side of the current HBA is near its floor; everything to gain is nuisance and flashing.
+  Rural, fast, clean oncoming cars: about 25 on 5a and 30 on 46, about 7k oncoming track-frames per drive. Enough for a
+  tree model with leave-one-drive-out, not for anything that learns appearance from pixels. Remaining label caveats: the
+  inverse-depth speed fit is garbage in dense scenes (|v| > 40 m/s on 1k near frames on 46; those are ignored), receding
+  chains with strong oncoming-kind frames (35 / 71) are kept out of training as `ambiguous`.
+- Audited frames: signs under our beam labelled reflector were right; wrong vehicle labels were tiny shoulder dots
+  resolved as "moving away"; one flux-ratio reflector was probably a headlight. Label quality, not model choice, is the
+  risk in step 2.
+
+### Step 2 and 3 results (2026-10-18, evening)
+
+**Step 2, the per-track classifier (`hba_tools/train/`):** 61 causal features per (chain, frame), gradient-boosted trees,
+trained on one drive and tested on the other. Verdict: it matches the rules, it does not beat them yet.
+
+| held-out drive | AUC oncoming vs static | oncoming recall at 5 % FPR | at the rules' own FPR (38-44 %) | rules |
+|---|---|---|---|---|
+| 5a (trained on 46) | 0.73 | 8 % | 75 %, lead 6.6 s | 74 %, lead 6.9 s |
+| 46 (trained on 5a) | 0.66 | 9 % | 67 %, lead 4.0 s | 73 %, lead 3.8 s |
+
+Why, in order: (1) three quarters of oncoming frames are the far history where a car is one white dot, and the label is
+the chain's hindsight label, so per-frame the problem is unlabelable there; (2) two drives: the top features were drive
+fingerprints (ego speed, time since the last switch, chain age), and dropping them raised oncoming AUC to 0.80 / 0.74;
+(3) the negatives were 7-11k near-range delineator frames, while the 29-33k `unknown` far dots the HBA actually dips
+for were never in training. The one clean result: the signs born at our own switch-on sit at the bottom of the score at
+any threshold (median p 0.005 / 0.023), from one feature, time since our beam came on. So that mechanism went into the
+policy (step 3) and the classifier waits for more drives; the pipeline (labels, features, fit, leave-one-drive-out) is
+in place, so every new night drive is a training set.
+
+A third pass (fingerprint features out, four physics features in: predicted static angular rate from v, dist and
+lateral, the observed rate, their ratio, and flux normalised to the chain's low-beam level; evaluation per chain as the
+max p over the last second; dc/dd/de added for negatives) moved it to "a cleaner version of the rules": at the
+false-positive rate `hba.py` actually runs at (its threat flag fires on 57-58 % of the labelled static/reflector
+chains) the model sees 98 % / 90 % of oncoming frames vs the rules' 85 % / 87 %, misses no car, same lead time, and
+keeps 100 % / 80 % of the born-at-switch signs down vs 65 % / 52 %. At a usable 2-5 % chain FPR it still misses 30-48
+of 47-70 cars before the pass; the 46 oncoming AUC of 0.72 is a transfer ceiling (town, four-lane, cars at 10-14 m
+lateral that rural 5a never showed). The far dots stay unlabelled: a "static exit" rule, the complement of the pass
+event, converts only 1.4-1.8 % of them, because far dots die at the horizon rather than exiting. The angular-rate
+consistency of a static point is not separable on its own (AUC 0.55-0.57; the lamp-height ray overestimates the range of
+low roadside reflectors by ~1.5x), so it is a veto, not a feature that carries the class. Every growth of the training
+set moved the held-out numbers; the label and feature pipeline reruns unattended in ~30 s per drive.
+
+**Step 3, the policy layer (`hba.py`, 2026-10-18):** three changes, all "the system knows what it just did":
+1. a light without a partner blob born within `beam_born_s` = 1.2 s of our high beam coming on is a reflector whatever
+   its size (the rule used to cover only blobs under `strong_area`, and the flashing signs were big); it stays one until
+   it shows a real lamp pair on 3 frames or measured oncoming motion (`Blob.partner`, new, is a second blob on the row;
+   `paired` also includes wide blobs, and a lit sign is wide);
+2. the glare override no longer flips a track marked reflector back to oncoming;
+3. a re-dip within `short_permit_s` of a restore doubles the next clear time whatever the confidence, unless a model
+   lead, a wide-camera lamp or measured oncoming motion caused it (a strong lone lamp right after a restore is most
+   often the sign we just lit). `_motion_fit` is factored out so reflector tracks can be checked for motion.
+
+Replay (open loop, so the born-at-switch rule only acts where the recorded beam came on when the replay restored):
+
+| replay permit, dark >= 60 km/h | 5a before | 5a after | 46 before | 46 after |
+|---|---|---|---|---|
+| on-periods | 52 | 43 | 31 | 30 |
+| of which < 1 s / < 2 s | 13 / 21 | 4 / 11 | 2 / 10 | 3 / 10 |
+| toggles per minute | 2.69 | 2.24 | 1.95 | 1.90 |
+| glare s (oncoming or preceding chain live) | 3.0 | 2.4 | 2.4 | 2.0 |
+| nuisance s | 293 | 302 | 172 | 199 |
+| high beam on | 31.9 % | 31.1 % | 27.2 % | 24.5 % |
+
+Of the 11 short on-periods left on 5a, 6 are a brand-new strong blob at the far end of the corridor while the recorded
+beam was already on (the sign was lit by the car's beam, not by a switch the replay can see), 3 are far red dots, 1 is
+a real oncoming car. On the car the born-at-switch rule covers the first group, so the real gain should be larger than
+the replay shows; the nuisance cost of the backoff is the 9-27 s.
+
+What this does not touch: the ~300 s of nuisance per drive. Half of it is the clear and backoff delay after dips for
+far unknown dots (238 s of 5a's dipped time is reason "delay" alone), the rest the dips themselves. That is the
+classifier's job once there is data, and the town gate's (51 % of dipped time on the car involved the town flag; the
+streetlight gate at 75-110 km/h on 5a segs 30-34 is a yard-light cluster, not a town, but c9's town was driven at
+70-88 km/h, so a speed condition needs the density distributions of real towns vs rural clusters first).
+
+Not verified: CPU on the device (`_motion_fit` now also runs for reflector tracks, a handful per frame), and nothing has
+been driven. Shadow mode first.
+
+### Order of work
+
+| step | deliverable | status |
+|---|---|---|
+| 1 | `hba_tools/score.py`: stitching, extended hindsight labels, the three numbers for 5a and 46, label audit | done 2026-10-18; labels being fixed (sign/side, pass events) |
+| 2 | feature extraction per track into a training table; GBDT trained on 5a + 46 (+ dc/dd/de for static), tested leave-one-drive-out | done 2026-10-18: matches the rules, waits for more drives |
+| 3 | layer C policy in `hba.py` behind the classifier, replay on all night drives, CPU check on the device | policy done 2026-10-18 (born-at-switch, backoff); device CPU open |
+| 4 | shadow drive (mode 1), then mode 3; the user's drive notes become hand labels | open |
+
+What this does not fix: a far oncoming car at 300 m is a single white dot and so is a delineator. No feature separates
+them on one frame; time, pairing as it approaches, and our beam response do. The policy therefore errs to dipping on the
+unknown far dot, as today, but it stops re-dipping on the dot it created itself.
+
+## 12. Evidence policy after Gentex SmartBeam (2026-10-19)
+
+Source: static RE of the Audi C6 SmartBeam mirror firmware (`carstuff\HBACam\SMARTBEAM_NOTES.md`). What it does that
+`hba.py` did not, mapped to our failures:
+
+| SmartBeam | what we had | our failure it addresses |
+|---|---|---|
+| each tracked light carries its own 0-31 index; every 200 ms frame its type steps it down (far taillight 1, bright close headlight 4-8, saturated: to 0); the global index is the minimum; bi-xenon closes below 25, i.e. after **7 points of evidence** (far light under 64 km/h ~1.4 s, close bright 0.4 s, saturated at once); steps double/triple above 64/137 km/h | any threat on two frames dips; a "strong" track dips on its first frame, skipping `confirm_s` | first-frame dips on lit signs; far dots that live 0.6 s each costing a dip and a clear delay |
+| classification thresholds are 24 points **lower while dipped** and full while the beam is on, and a light must be older than one frame to count while on | brightness and bloom count *more* under our high beam (a lit sign becomes "strong") | the 2.6 s sign flashing on route 5a |
+| restore by cause: fast return 0.4-1.6 s after an oncoming car passes at the near edge; 3 s hold for headlights/taillights that vanish (6 s taillights > 130 km/h); holds arm only after 2 frames; leaky seen-counters (+2/-1, cap 5); 2-5 s minimum low-beam time after every dip | one `clear_s` for everything, doubling backoff | restores between two cars (done, below) |
+| village: "prevent switch-on" variant; thresholds x2.3 count / x1.5 brightness above 90 km/h | streetlight density, same at any speed | not done yet (idea 4) |
+
+### What is implemented (`HbaPolicy` in `hba.py`, `evidence=True`)
+
+The decision layer is now its own class fed with `TrackView`s (kind, why, strong, near, pairing, reflector), so it can
+be rerun on replay csvs without video (`hba_tools/policy_sim.py`; `evidence=False` is the old decision and reproduces
+the replay's own permit on 99.9 % / 99.7 % of 5a / 46 frames). Each track's evidence grows at a rate per second
+(1 = dip; > 10/s is one 10 Hz frame):
+
+| what the track shows | rate | time to dip |
+|---|---|---|
+| model lead, wide-camera lamp | - | at once (not per track) |
+| measured oncoming motion | 12 | one frame |
+| bright (area >= 25 or saturated) within 70 m, either beam | 12 | one frame |
+| bright, farther or no range, our high beam **off** | 6 | two frames |
+| bright, farther or no range, our high beam **on** | 2.5 | 0.4 s |
+| weak within 70 m | 6 | two frames |
+| weak, far, lamp pair over 0.5 s | 4 | 0.25 s |
+| weak, far, lone dot | 0.5 | 2 s (the rules never dipped for these) |
+| classified static / reflector | -2 | drains |
+| lost (a re-detection within `gate_px` in 1 s inherits it) | -3 | drains |
+
+A track at >= 0.5 holds the clear timer. Restore and backoff are unchanged.
+
+Why the high-beam discount is **far only**: on 5a / 46, the strong non-static lights the replay saw under our high
+beam that hindsight calls reflectors are far and big (area median 164 / 184 px); the oncoming cars among them are far
+and small (24 / 30 px) or within 70 m (34-160 px). A first version discounted every bright light under our beam and
+put real cars at 14-45 m 0.4-0.9 s late on 46 (`policy_sim.py --diff`); splitting by range removed all of them.
+(`sep_stats.py` prints the table.)
+
+### Results (open loop; policy_sim on the step-3 replays `runs/new5a`, `runs/new46`, dark >= 60 km/h)
+
+`glare<` counts only vehicle chains within 200 m (distance-weighted glare is the number that matters to the other
+driver; the plain glare column counts a car at 400 m like one at 80 m).
+
+| | 5a legacy | 5a evidence | 46 legacy | 46 evidence |
+|---|---|---|---|---|
+| high beam on | 31.2 % | 35.7 % | 24.3 % | 26.5 % |
+| glare s | 2.4 | 1.5 | 2.0 | 2.0 |
+| glare< 200 m s | 1.5 | 0.9 | 1.7 | 1.7 |
+| nuisance s | 304 | 250 (-18 %) | 203 | 181 (-11 %) |
+| toggles / min | 2.24 | 2.19 | 1.90 | 1.78 |
+| on-periods < 2 s | 11 | 6 | 11 | 9 |
+
+Sweep (one parameter at a time from the first defaults, then combinations; full output in the session, rerun with
+`policy_sim.py --var ...`): slowing *near* or *pair* evidence or lowering `clear_s` buys nuisance with glare on 46;
+dropping the backoff (`clear_max_s=2`) buys 40-60 s of nuisance but adds toggles, and the backoff is the closed-loop
+anti-flash, so it stays; `ev_hold` and the speed gain made no difference at these rates; `ev_lone=0.5` lowered glare
+on both drives (far lone dots that persist are often cars).
+
+Checked on the real pipeline: a full video replay of the new `hba.py` (`runs/ev5a`, `runs/ev46`) agrees with the
+simulated policy on 99.9 % of frames on both drives, and its own permit gives the numbers above (5a: glare 1.5 s,
+nuisance 247 s, 6 on-periods < 2 s; 46: glare 2.0 s, nuisance 180 s). Replay time per frame on the desktop is within
+noise of before (the policy is a dict update per track); device CPU not re-measured. 69 lightd tests pass (four new:
+far bright light under our beam is slow, near bright light is instant either way, a lone far dot must persist and keeps
+its evidence through a flicker, the legacy policy is still selectable).
+
+What open loop cannot show: the high-beam rate only acts on frames where the *recorded* beam was on (~5 min per drive),
+and the flashing it targets is closed loop (our beam lights the sign). Its value was chosen from SmartBeam's ratio
+(far headlight vs bright close one, 1 : 4-8) and the switch-to-sign latency on 5a (0.3-1.0 s), not fitted. It needs
+the shadow drive (section 11, step 4) and then a mode 3 drive; the first number to check there is on-periods < 2 s.
+
+### Restore by cause (`restore_by_cause=True`, 2026-10-19)
+
+Every track that held the corridor is recorded when it stops: **pass** (lost on the oncoming half of the image, not red,
+within 70 m or >= `pass_area` px), **far** (lost while far: a bend or a crest), **other** (still there but static now or
+drained: a sign); a model lead or a speed/town/dark gate counts as other, a wide-guard hit as wide. Only what ended in
+the `cause_window_s` = 1 s before the corridor went clear says what cleared it (the car's other lamp or a far dot that
+died earlier doesn't matter, SmartBeam only asks that nothing is there now). Then:
+
+- cleared by a pass (plus the wide guard seeing the same car): restore after `clear_pass_s` = 0.5 s;
+- cleared by far losses only: `clear_far_s` = 2 s (3 s, SmartBeam's hold, cost 7-12 s of nuisance for no glare);
+- anything else: `clear_s` = 2 s; the doubling backoff still wins whenever it is above that;
+- and every dip stays low at least `min_low_s` = 3 s at >= 70 km/h, rising to 5 s at 28 km/h.
+
+| policy_sim, `runs/ev5a` / `runs/ev46` | 5a evidence | 5a + cause | 46 evidence | 46 + cause |
+|---|---|---|---|---|
+| high beam on | 35.7 % | 35.4 % | 26.5 % | 26.6 % |
+| glare s | 1.5 | 1.0 | 2.0 | 1.5 |
+| glare< 200 m s | 0.9 | 0.8 | 1.7 | 1.2 |
+| nuisance s | 250 | 253 | 181 | 179 |
+| toggles / min | 2.19 | 2.13 | 1.78 | 1.60 |
+| on-periods < 1 s / < 2 s | 3 / 6 | 4 / 5 | 3 / 9 | 0 / 5 |
+
+Against legacy (the rules before section 12) that is, on 5a: glare 2.4 -> 1.0 s, nuisance 304 -> 253 s, on-periods < 2 s
+11 -> 5; on 46: glare 2.0 -> 1.5 s, nuisance 203 -> 179 s, toggles 1.90 -> 1.60 / min, on-periods < 2 s 11 -> 5.
+
+What did the work: the minimum low time (3 s), not the fast return. Only 4-6 restores per drive are cleared by a pass
+alone (most cars pass while something else still holds the corridor), so the 0.5 s return saves 3-5 s of nuisance per
+drive. The minimum time removes restores between two cars of a group and the shortest on-periods: 2.5 s did half of it,
+4 s cost another 10-20 s of nuisance for nothing. The policy-only change was not re-run through a full video replay (the
+replay matched policy_sim on 99.9 % of frames before it); 71 lightd tests pass.
+
+### Next, from the same source
+
+4. **Town gate**: the "prevent switch-on only" variant and SmartBeam's speed split of the thresholds (90 km/h).
+5. **Exposure**: `hba.py` thresholds are raw pixel values and never see `exposureValPercent` or gain. If auto exposure
+   reacts to our own high beam, every brightness test moves with our switching. Log both into the track csv and check.
+6. Speed band: SmartBeam stays on down to 28 km/h once on (switch-on 58); ours drops at 50.

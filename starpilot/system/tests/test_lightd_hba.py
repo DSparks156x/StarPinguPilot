@@ -112,14 +112,14 @@ def test_dark_empty_road_restores_high_beam_after_clear_time():
 def test_oncoming_headlight_dips_fast_and_restores_slow():
   clf = HbaClassifier()
   geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
-  run(clf, [dark_frame()] * 60)
+  run(clf, [dark_frame()] * 120)  # permitted since 2 s; a lamp within short_permit_s of that would back off
   # big saturated headlight in the oncoming lane at 150 m, approaching
   frames = [frame_with_light(geom, 150 - i * 2.0, -3.6, 0.7, radius=4) for i in range(20)]
-  outs = run(clf, frames, t0=3.0)
+  outs = run(clf, frames, t0=6.0)
   dip = next(i for i, o in enumerate(outs) if not o.high_beam_permitted)
-  assert dip <= 2
+  assert (dip + 1) * DT <= 1.0 / clf.p.ev_strong_far + DT + 1e-9  # far (no range at 150 m), our beam off: two 10 Hz frames
   assert outs[-1].reason & REASON_ONCOMING
-  after = run(clf, [dark_frame()] * 60, t0=4.0)
+  after = run(clf, [dark_frame()] * 60, t0=7.0)
   assert not any(o.high_beam_permitted for o in after[:int(clf.p.clear_s / DT) - 1])
   assert after[-1].high_beam_permitted
 
@@ -234,12 +234,121 @@ def test_restores_cut_short_by_weak_lights_back_off():
   assert outs[-1].clear_needed_s == clf.p.clear_s
 
 
-def test_a_real_car_right_after_a_restore_does_not_back_off():
+def test_only_a_lead_right_after_a_restore_skips_the_backoff():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  lamp = [frame_with_light(geom, 60, -3.6, 0.7, radius=4)] * 4
+  # a strong lone lamp right after a restore is most often the sign our beam just lit: it dips, and backs off
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 50)
+  outs = run(clf, lamp, t0=2.5)
+  assert not outs[-1].high_beam_permitted and outs[-1].clear_needed_s == 2 * clf.p.clear_s
+  # a model lead is a car whatever the timing
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 50)
+  outs = run(clf, lamp, t0=2.5, model=dict(STRAIGHT, leads=[(0.9, 60.0, 0.0)]))
+  assert not outs[-1].high_beam_permitted and outs[-1].clear_needed_s == clf.p.clear_s
+
+
+def test_a_light_born_at_our_switch_on_is_a_reflector_until_it_pairs():
   clf = HbaClassifier()
   geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
-  run(clf, [dark_frame()] * 50)
-  outs = run(clf, [frame_with_light(geom, 60, -3.6, 0.7, radius=4)] * 4, t0=2.5)
-  assert not outs[-1].high_beam_permitted and outs[-1].clear_needed_s == clf.p.clear_s
+  outs = run(clf, [dark_frame()] * 50, high_beam_on=False)
+  assert outs[-1].high_beam_permitted
+  # the shutter opens and a big lone lamp-like light is there at once: the sign we lit, however bright it blooms
+  sign = frame_with_light(geom, 150.0, -3.6, 0.7, radius=6, glow=True)
+  outs = run(clf, [sign] * 20, t0=2.5, high_beam_on=True)
+  assert all(o.high_beam_permitted for o in outs)
+  assert {tr.why for tr in clf.tracks if tr.missed == 0} == {"beam"}
+  # it was a car after all: a lamp pair dips
+  outs = run(clf, _pair_frames(geom, 10, 3, 255), t0=3.5, high_beam_on=True)
+  assert not outs[-1].high_beam_permitted
+
+
+def _first_dip(outs):
+  return next((i for i, o in enumerate(outs) if not o.high_beam_permitted), None)
+
+
+def test_a_far_bright_light_builds_evidence_slowly_under_our_high_beam():
+  # the signs our high beam lights are far, big and saturated: a far bright light needs 1 / ev_strong_hb s under it,
+  # 1 / ev_strong_far without it
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  lamp = [frame_with_light(geom, 150.0, -3.6, 0.7, radius=4)] * 40
+  times = {}
+  for hb in (False, True):
+    clf = HbaClassifier()
+    run(clf, [dark_frame()] * 120, high_beam_on=hb)
+    outs = run(clf, lamp, t0=6.0, high_beam_on=hb)
+    times[hb] = (_first_dip(outs) + 1) * DT
+  assert times[False] <= 1.0 / clf.p.ev_strong_far + DT + 1e-9
+  assert times[True] == pytest.approx(1.0 / clf.p.ev_strong_hb, abs=2 * DT)
+
+
+def test_a_near_bright_light_dips_at_once_whatever_our_beam():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  for hb in (False, True):
+    clf = HbaClassifier()
+    run(clf, [dark_frame()] * 120, high_beam_on=hb)
+    near = [frame_with_light(geom, 40.0 - i * 1.5, -3.6, 0.7, radius=6) for i in range(10)]
+    outs = run(clf, near, t0=6.0, high_beam_on=hb)
+    assert (_first_dip(outs) + 1) * DT <= 1.0 / clf.p.ev_strong + DT + 1e-9
+
+
+def test_a_far_lone_dot_must_persist_and_keeps_its_evidence_through_a_flicker():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  dot = frame_with_light(geom, 160.0, -3.6, 0.7, radius=1)  # a weak far lone light: what a delineator or a far car is
+  need = 1.0 / HbaParams().ev_lone
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 120)
+  n = round(0.6 * need / DT)
+  outs = run(clf, [dot] * n, t0=6.0)
+  assert _first_dip(outs) is None  # not long enough
+  # it flickers out for 0.1 s: a re-detection inherits what it had built (less ev_missing * 0.1 s), so 0.8 of the
+  # time it needs on its own is enough now
+  t = 6.0 + n * DT
+  run(clf, [dark_frame()] * 2, t0=t)
+  outs = run(clf, [dot] * round(0.8 * need / DT), t0=t + 2 * DT)
+  assert _first_dip(outs) is not None
+  assert outs[-1].evidence >= 1.0 and outs[-1].reason & REASON_ONCOMING
+
+
+def _restore_after(clf, t0):
+  outs = run(clf, [dark_frame()] * 120, t0=t0)
+  return (next(i for i, o in enumerate(outs) if o.high_beam_permitted) + 1) * DT
+
+
+def test_restore_is_fast_after_a_pass_and_slower_when_a_light_vanishes_far():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  # an oncoming car closing from 150 m to 20 m over 4 s (longer than the minimum low time), then it's past us
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 120)
+  passing = [frame_with_light(geom, 150.0 - i * 130.0 / 80, -3.6, 0.7, radius=4) for i in range(80)]
+  assert not run(clf, passing, t0=6.0)[-1].high_beam_permitted
+  assert _restore_after(clf, 10.0) == pytest.approx(clf.p.clear_pass_s, abs=2 * DT)
+  # the same light vanishing at 150 m (a bend, a crest): it usually comes back
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 120)
+  assert not run(clf, [frame_with_light(geom, 150.0, -3.6, 0.7, radius=4)] * 80, t0=6.0)[-1].high_beam_permitted
+  assert _restore_after(clf, 10.0) == pytest.approx(clf.p.clear_far_s, abs=2 * DT)
+
+
+def test_a_short_dip_stays_low_for_the_minimum_time():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 120)
+  near = [frame_with_light(geom, 40.0 - i * 1.5, -3.6, 0.7, radius=6) for i in range(6)]  # 0.3 s, then past us
+  outs = run(clf, near, t0=6.0)
+  dip = _first_dip(outs)
+  low = dip * DT + _restore_after(clf, 6.0 + len(near) * DT) + (len(near) - dip - 1) * DT
+  assert low == pytest.approx(clf.p.min_low_s[0], abs=2 * DT)  # FAST is above min_low_v[1]
+
+
+def test_legacy_policy_is_still_there():
+  # evidence=False is the pre-evidence decision (tools/policy_sim.py compares against it)
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  clf = HbaClassifier(HbaParams(evidence=False))
+  run(clf, [dark_frame()] * 120)
+  outs = run(clf, [frame_with_light(geom, 150.0, -3.6, 0.7, radius=4)] * 5, t0=6.0)
+  assert _first_dip(outs) == 0
 
 
 def test_timing_does_not_depend_on_the_frame_rate():

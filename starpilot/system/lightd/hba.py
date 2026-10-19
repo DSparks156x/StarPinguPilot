@@ -14,10 +14,17 @@ Pipeline:
      object's own speed comes from how fast inverse depth changes vs our speed. Roadside reflectors and other
      static lights move like the road (speed ~0), oncoming lamps approach faster than we drive.
   4. our own high beam: retroreflectors (delineators, signs) brighten when it switches on and dim when it switches
-     off; lamps don't care. Tracks that follow the switch are reflectors for good.
-  5. decision: any plausible vehicle dips at once; restoring needs a clear corridor for clear_s, which backs off
-     when restores keep getting cut short. Reasons use the FL1_Abblendursache bits from the PQ35 K-matrix
-     (mFLA_1, 0x65A).
+     off; lamps don't care. Tracks that follow the switch, and lone lights born within a second of it switching on,
+     are reflectors until they show what a sign can't: a lamp pair or oncoming motion. The high beam lights a far
+     sign 5-10x brighter, so without this the restore itself creates the next "strong lamp" (route 5a flashed at
+     signs every 2.6 s).
+  5. decision (HbaPolicy): each track builds up evidence at a rate set by what it shows (after Gentex SmartBeam's
+     per-light index): a model lead, a wide-camera lamp, measured oncoming motion or a bright near lamp dip on their
+     first frame, a far bright light in two frames, but under our own high beam (which lights far signs to the same
+     look) in 0.4 s, a far lone dot only after 2 s. Lost tracks hand their evidence to a re-detection nearby.
+     Restoring needs a clear corridor for clear_s, which backs off when restores keep getting cut short by anything a
+     sign could be (not a model lead, a wide-camera lamp or measured oncoming motion). Reasons use the
+     FL1_Abblendursache bits from the PQ35 K-matrix (mFLA_1, 0x65A).
   6. town: streetlights and lit windows (bright, unsaturated, high above the road, outside the corridor) averaged over
      a few seconds with hysteresis, or a posted limit <= 50 km/h, block the high beam like the speed gate.
 All timing is in seconds, so the result doesn't depend on the rate the worker manages.
@@ -153,7 +160,9 @@ class HbaParams:
   beam_before_s: float = 0.4        # flux before a switch...
   beam_after_s: tuple = (0.15, 0.6)  # ...vs after it (the bi-xenon flap and CAN delay)
   beam_ratio: float = 1.8           # a reflector brightens at least this much when the high beam comes on
-  beam_born_s: float = 0.4          # an unpaired light that first shows up this soon after switching on is a reflector
+  beam_born_s: float = 1.2          # an unpaired light that first shows up this soon after our high beam came on is the
+                                    # sign it lit, whatever its size (the permit -> CAN -> shutter -> camera -> 10 Hz chain
+                                    # is up to ~1 s; on route 5a the lit signs were born 0.3-1.0 s after GK1_Fernlicht)
   # decision
   lead_prob: float = 0.5
   lead_max_x: float = 400.0
@@ -164,6 +173,36 @@ class HbaParams:
   backoff_reset_s: float = 10.0     # this long permitted resets the backoff
   enable_v: float = 60 / 3.6
   disable_v: float = 50 / 3.6
+  # evidence (after Gentex SmartBeam, see DESIGN.md section 12): instead of "any threat on two frames dips", each track
+  # builds up evidence at a rate (per second, 1 = dip) set by what it shows, and the beam dips when one track's evidence
+  # reaches 1. Weak, far, lone lights must persist; a lamp we are sure of dips on its first frame (rate > 1 / frame dt, so
+  # 12 is one frame at 10 Hz and 6 two). Under our own high
+  # beam a bright blob is the weakest evidence there is (the sign we just lit is bright too), so it builds slowly.
+  evidence: bool = True
+  ev_motion: float = 12.0           # measured oncoming motion
+  ev_strong: float = 12.0           # big or saturated lamp inside motion_max_dist
+  ev_strong_far: float = 6.0        # ...farther (or no range), our high beam off: two frames
+  ev_strong_hb: float = 2.5         # ...farther, our high beam on: the signs it lights are far, big and saturated
+  ev_near: float = 6.0              # weak light inside motion_max_dist
+  ev_pair: float = 4.0              # weak far light with a lamp partner over pair_window_s
+  ev_lone: float = 0.5              # weak far lone dot: 2 s (the rules never dipped for these; a far car is one)
+  ev_static: float = -2.0           # classified static: evidence drains
+  ev_missing: float = -3.0          # a lost track's evidence drains this fast; a re-detection near it inherits it...
+  ev_ghost_s: float = 1.0           # ...for this long (far lamps flicker in and out at this exposure)
+  ev_hold: float = 0.5              # a track at or above this keeps the corridor from counting as clear
+  ev_gain_v: tuple = (64 / 3.6, 110 / 3.6)  # evidence builds faster at speed (less time to the pass)...
+  ev_gain_max: float = 1.0          # ...up to this factor at ev_gain_v[1]
+  # restore by cause (SmartBeam's fast return to bright, holds and minimum low-beam time): an oncoming car that passed
+  # us is gone for good, a light that vanished far out (a bend, a crest) usually comes back
+  restore_by_cause: bool = True
+  clear_pass_s: float = 0.5         # clear time when every light we dipped for left by passing us
+  clear_far_s: float = 2.0          # ...when one vanished while still far
+  cause_window_s: float = 1.0       # what ended this long before the corridor went clear is what cleared it
+  pass_area: int = 100              # a lost light this big, or inside motion_max_dist, on the oncoming half of the image
+                                    # (and not red) went by us; the wide guard's hit right after a pass is the same car
+  min_low_s: tuple = (3.0, 5.0)     # every dip stays low at least this long: the first at min_low_v[1] and up, the second
+  min_low_v: tuple = (28 / 3.6, 70 / 3.6)  # at min_low_v[0] and below. SmartBeam uses 2 s; on 5a and 46, 3 s cut glare by a
+                                    # third (restores between two cars) for ~5 s of nuisance per drive, 4 s cost 20 s more
   # town: streetlights and lit windows, i.e. bright unsaturated lights high above the road outside the corridor.
   # Above the row of a point town_height over the road town_ref_m out, a light is higher than that or nearer.
   town_height: float = 3.0
@@ -210,6 +249,7 @@ class Blob:
   sat: int = 0          # median HSV saturation / hue of its pixels
   hue: int = 0
   paired: bool = False  # has a same-colour partner on its row, or is a wide blob (two lamps merged)
+  partner: bool = False # the first of those only: a wide blob is also what a sign lit by our beam looks like
   post: bool = False    # tall white rectangle without a partner: delineator reflector, not a lamp
 
 
@@ -229,6 +269,7 @@ class Obs(NamedTuple):
   sat: int
   high: bool    # its ray never passes through the lamp band over the road (or only right next to us, and the blob
                 # is small): building, sign, streetlight
+  partner: bool = False  # paired by a second blob on its row, not by being wide
 
 
 @dataclass
@@ -258,6 +299,10 @@ class Track:
     o = self.hist[-1]
     return o.area >= p.strong_area or (o.peak >= p.strong_peak and o.area >= p.strong_peak_area)
 
+  def paired_recent(self, p):
+    recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
+    return sum(h.paired for h in recent) >= p.pair_min
+
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
       return False
@@ -267,8 +312,29 @@ class Track:
       return False
     # far lights (no usable motion) must look like a vehicle: a lamp pair, not a lone delineator or porch light
     far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
-    recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
-    return not far or sum(h.paired for h in recent) >= p.pair_min
+    return not far or self.paired_recent(p)
+
+  def view(self, p):
+    o = self.hist[-1]
+    far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
+    return TrackView(self.tid, o.u, o.v, self.kind, self.why, self.strong(p), self.is_threat(p), not far,
+                     self.paired_recent(p), self.reflector, o.area)
+
+
+class TrackView(NamedTuple):
+  """What the decision policy needs of a live track; replay_hba's tracks csv carries the same, so the policy can be
+  rerun offline (hba_tools/policy_sim.py) without decoding video."""
+  tid: int
+  u: float
+  v: float
+  kind: str
+  why: str
+  strong: bool
+  threat: bool     # Track.is_threat: the rules' own yes/no
+  near: bool       # inside motion_max_dist
+  paired: bool     # a lamp pair on pair_min frames of pair_window_s
+  reflector: bool
+  area: float = 0.0
 
 
 @dataclass
@@ -286,6 +352,7 @@ class HbaOut:
   town: bool = False
   town_lights: float = 0.0  # mean town lights per frame over town_window_s
   n_wide: int = 0           # lamps the wide-camera guard saw (its last look, while it holds)
+  evidence: float = 0.0     # the highest track evidence (1 = dip)
 
 
 class Geometry:
@@ -710,7 +777,8 @@ def blobs_in(y, hsv, white, red, p: HbaParams):
       if 2 <= dx <= max_dx and dy <= 2 + p.pair_dy_frac * dx and max(a.area, b.area) <= p.pair_area_ratio * min(a.area, b.area):
         partners += 1
     # exactly one partner: a lamp pair. Two or more: a row of house/street lights or a delineator chain.
-    a.paired = partners == 1 or (partners == 0 and not a.post and w >= 3 and w >= p.wide_ratio * h)
+    a.partner = partners == 1
+    a.paired = a.partner or (partners == 0 and not a.post and w >= 3 and w >= p.wide_ratio * h)
   for a in blobs:
     a.post = a.post and not a.paired
   return blobs
@@ -833,17 +901,199 @@ def wide_lights(frame: Nv12Frame, geom: Geometry, center, p: HbaParams, narrow: 
   return out
 
 
+class HbaPolicy:
+  """The decision: from live tracks (TrackView), a model lead, the wide guard, speed, darkness, town and our own beam
+  to permitted + reason. Kept apart from the pixels so hba_tools/policy_sim.py can rerun it on replay csvs."""
+
+  def __init__(self, p: HbaParams):
+    self.p = p
+    self.reset()
+
+  def reset(self):
+    self.threat_since: float | None = None
+    self.clear_since: float | None = None
+    self.speed_ok = False
+    self.permitted = False
+    self.permit_since: float | None = None
+    self.clear_needed = self.p.clear_s
+    self.ev: dict[int, tuple[float, float, float]] = {}  # tid -> (evidence, u, v) of tracks live last frame
+    self.ghosts: list[tuple[float, float, float, float]] = []  # (t lost, evidence, u, v)
+    self.last_t: float | None = None
+    self.live_last: dict[int, TrackView] = {}  # tracks that held the corridor last frame
+    self.causes: dict[str, float] = {}  # pass / far / wide / other -> when a threat last ended that way (or was there)
+    self.dip_t: float | None = None
+
+  def _ended(self, tv: TrackView, lost: bool):
+    """How a track that held the corridor stopped holding it."""
+    p = self.p
+    if not lost:
+      return "other"  # still there, but static now or its evidence drained: a sign, a reflector, a flicker
+    oncoming_half = p.oncoming_side * (tv.u - FCAM_W / 2) > 0
+    if oncoming_half and tv.kind != KIND_PRECEDING and (tv.near or tv.area >= p.pass_area):
+      return "pass"
+    return "other" if tv.near else "far"
+
+  def _clear_needed(self, v_ego):
+    p = self.p
+    if self.clear_needed > p.clear_s or not p.restore_by_cause:
+      return self.clear_needed  # backing off after early re-dips: that wins
+    # only what ended just before the corridor went clear says what cleared it
+    c = {k for k, t in self.causes.items() if t >= self.clear_since - p.cause_window_s}
+    if "pass" in c and c <= {"pass", "wide"}:
+      return p.clear_pass_s
+    if c == {"far"} or c == {"far", "pass"}:
+      return p.clear_far_s
+    return p.clear_s
+
+  def _min_low(self, v_ego):
+    p = self.p
+    lo, hi = p.min_low_v
+    f = min(max((v_ego - lo) / max(hi - lo, 1e-3), 0.0), 1.0)
+    return p.min_low_s[1] + (p.min_low_s[0] - p.min_low_s[1]) * f
+
+  def _rate(self, tv: TrackView, high_beam_on):
+    p = self.p
+    if tv.kind == KIND_STATIC:
+      return p.ev_static
+    if tv.kind == KIND_ONCOMING and tv.why == "motion":
+      return p.ev_motion
+    if tv.strong:
+      if tv.near:
+        return p.ev_strong
+      return p.ev_strong_hb if high_beam_on else p.ev_strong_far
+    if tv.near:
+      return p.ev_near
+    return p.ev_pair if tv.paired else p.ev_lone
+
+  def _evidence(self, t, views, v_ego, high_beam_on):
+    """Integrates each track's evidence over dt; returns {tid: evidence}."""
+    p = self.p
+    dt = 0.1 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.3)
+    self.last_t = t
+    lo, hi = p.ev_gain_v
+    gain = 1.0 + (p.ev_gain_max - 1.0) * min(max((v_ego - lo) / max(hi - lo, 1e-3), 0.0), 1.0)
+    seen = {tv.tid for tv in views}
+    self.ghosts = [g for g in self.ghosts if t - g[0] <= p.ev_ghost_s]
+    self.ghosts += [(t, e, u, v) for tid, (e, u, v) in self.ev.items() if tid not in seen and e > 0.0]
+    ev = {}
+    for tv in views:
+      if tv.tid in self.ev:
+        e = self.ev[tv.tid][0]
+      else:
+        # a re-detection of a light that flickered out inherits what it had built, less what drained meanwhile
+        near = [g for g in self.ghosts if math.hypot(g[2] - tv.u, g[3] - tv.v) < p.gate_px]
+        e = max((g[1] + p.ev_missing * (t - g[0]) for g in near), default=0.0)
+        self.ghosts = [g for g in self.ghosts if g not in near]
+      r = self._rate(tv, high_beam_on)
+      e = min(max(e + (r * gain if r > 0 else r) * dt, 0.0), 1.0)
+      if dt == 0.0 and r * gain * 0.1 >= 1.0:
+        e = 1.0  # first frame after a reset: what dips on its first frame still does
+      ev[tv.tid] = e
+    self.ev = {tv.tid: (ev[tv.tid], tv.u, tv.v) for tv in views}
+    return ev
+
+  def step(self, t, out: HbaOut, views, model_lead, wide_threat, v_ego, dark, high_beam_on):
+    """Fills out.{n_*, threat, reason, high_beam_permitted, clear_for_s, clear_needed_s, evidence}; out.town is an input."""
+    p = self.p
+    if p.evidence:
+      ev = self._evidence(t, views, v_ego, high_beam_on)
+      live = [tv for tv in views if ev[tv.tid] >= p.ev_hold]
+      out.evidence = max(ev.values(), default=0.0)
+      dipping = [tv for tv in views if ev[tv.tid] >= 1.0]
+      confident = model_lead or wide_threat or bool(dipping)
+      sure = model_lead or wide_threat or any(tv.kind == KIND_ONCOMING and tv.why == "motion" for tv in dipping)
+    else:
+      live = [tv for tv in views if tv.threat]
+      # a threat we're sure of (model lead, a big lamp, oncoming motion) dips on its first frame...
+      confident = model_lead or wide_threat or any(tv.strong or tv.kind == KIND_ONCOMING for tv in live)
+      # ...but only what a sign can't be (a model lead, a wide-camera lamp, measured oncoming motion) says anything
+      # about the last restore: a strong lone lamp right after a restore is most often the sign our own beam just lit
+      # (route 5a flashed at signs every 2.6 s), so it backs off like a weak one
+      sure = model_lead or wide_threat or any(tv.kind == KIND_ONCOMING and tv.why == "motion" for tv in live)
+    now = {tv.tid for tv in views}
+    held = {tv.tid for tv in live}
+    for tid, tv in self.live_last.items():
+      if tid not in held:
+        self.causes[self._ended(tv, tid not in now)] = t
+    self.live_last = {tv.tid: tv for tv in live}
+    out.n_oncoming = sum(tv.kind == KIND_ONCOMING for tv in live)
+    out.n_preceding = sum(tv.kind == KIND_PRECEDING for tv in live)
+    out.n_candidates = sum(tv.kind == KIND_CANDIDATE for tv in live)
+
+    reason = 0
+    if out.n_oncoming or out.n_candidates or wide_threat:
+      reason |= REASON_ONCOMING
+    if out.n_preceding or model_lead:
+      reason |= REASON_PRECEDING
+    out.threat = reason != 0
+    if not out.threat:
+      self.threat_since = None
+    elif self.threat_since is None:
+      self.threat_since = t
+
+    if v_ego > p.enable_v:
+      self.speed_ok = True
+    elif v_ego < p.disable_v:
+      self.speed_ok = False
+    if not self.speed_ok:
+      reason |= REASON_SPEED
+    if not dark:
+      reason |= REASON_TOO_BRIGHT
+    if out.town:
+      reason |= REASON_TOWN
+
+    if p.evidence:
+      dip = confident
+    else:
+      # a threat we're sure of dips on its first frame; weak ones need dip_s (two frames) so one-frame flickers don't
+      dip = self.threat_since is not None and (confident or t - self.threat_since >= p.dip_s)
+    gated = not self.speed_ok or not dark or out.town
+    if dip or gated:
+      if self.permitted or self.dip_t is None:
+        self.dip_t = t
+        self.causes = {}  # a new low-beam episode: only how its own threats end counts
+      if (self.permitted and dip and not sure and self.permit_since is not None
+          and t - self.permit_since < p.short_permit_s):
+        self.clear_needed = min(2 * self.clear_needed, p.clear_max_s)  # restored too early: wait longer next time
+      self.permitted = False
+      self.permit_since = None
+      self.clear_since = None
+    if gated or model_lead:
+      self.causes["other"] = t
+    if wide_threat:
+      self.causes["wide"] = t
+    if not (dip or gated) and not out.threat:
+      if self.clear_since is None:
+        self.clear_since = t
+      out.clear_for_s = t - self.clear_since
+      needed = self.clear_needed
+      low_long_enough = True
+      if p.restore_by_cause and p.evidence:
+        needed = self._clear_needed(v_ego)
+        low_long_enough = self.dip_t is None or t - self.dip_t >= self._min_low(v_ego)
+      out.clear_needed_s = needed
+      if out.clear_for_s >= needed and low_long_enough and not self.permitted:
+        self.permitted = True
+        self.permit_since = t
+        self.causes = {}
+      elif not self.permitted:
+        reason |= REASON_DELAY
+    if self.permitted and t - self.permit_since >= p.backoff_reset_s:
+      self.clear_needed = p.clear_s
+    if not out.clear_needed_s:
+      out.clear_needed_s = self.clear_needed
+    out.high_beam_permitted = self.permitted
+    out.reason = 0 if self.permitted else reason
+    out.valid = True
+    return out
+
+
 class HbaClassifier:
   def __init__(self, p: HbaParams | None = None):
     self.p = p or HbaParams()
     self.tracks: list[Track] = []
     self._next_id = 0
-    self._threat_since: float | None = None
-    self._clear_since: float | None = None
-    self._speed_ok = False
-    self._permitted = False
-    self._permit_since: float | None = None
-    self._clear_needed = self.p.clear_s
+    self.policy = HbaPolicy(self.p)
     self._last_t: float | None = None
     self._beam: bool | None = None
     self._beam_switches: list[tuple[float, bool]] = []  # (t, on) of recent switches of our high beam
@@ -881,8 +1131,9 @@ class HbaClassifier:
     for j in unmatched:
       b = blobs[j]
       tr = Track(self._next_id, [self._obs(t, b, geom, center)], first_t=t)
-      # our high beam just came on and a lone light appeared with it: a reflector it lit up
-      tr.reflector = bool(born and not b.paired and b.area < p.strong_area)
+      # our high beam just came on and a light without a partner appeared with it: a reflector it lit up (a wide
+      # blob counts as paired elsewhere, but a lit sign is wide too)
+      tr.reflector = bool(born and not b.partner)
       self._next_id += 1
       self.tracks.append(tr)
     self.tracks = [tr for tr in self.tracks if t - tr.hist[-1].t <= p.max_missed_s]
@@ -903,7 +1154,7 @@ class HbaClassifier:
     if rh is not None:
       in_band = (rh[1][1:] >= p.lamp_low - p.band_slack) & (rh[1][1:] <= p.lamp_high + p.band_slack)
       high = not in_band.any() or (b.area < p.near_band_area and center[in_band, 0].max() < p.near_band_m)
-    return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high)
+    return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner)
 
   def _beam_check(self, tr: Track):
     """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
@@ -931,7 +1182,8 @@ class HbaClassifier:
     # missing an oncoming car is glare in someone's eyes; a sign we dip for costs a few seconds of high beam
     last = tr.hist[-1]
     oncoming_side = not np.isfinite(last.angle) or p.oncoming_side * last.angle > -p.glare_side_deg
-    if tr.strong(p) and not last.red and not last.high and not last.post and oncoming_side and tr.kind == KIND_STATIC:
+    if (tr.strong(p) and not last.red and not last.high and not last.post and oncoming_side and tr.kind == KIND_STATIC
+        and not tr.reflector):  # a light that followed our own switching is a sign, however bright
       tr.kind, tr.why = KIND_ONCOMING, "glare"
 
   def _classify_frame(self, tr: Track, v_ego, center):
@@ -943,9 +1195,14 @@ class HbaClassifier:
     if not tr.reflector and self._beam_switches:
       self._beam_check(tr)
     if tr.reflector:
-      tr.obj_speed = float("nan")
-      tr.kind, tr.why = KIND_STATIC, "beam"
-      return
+      # it lit up with our beam: a sign, until it shows what a sign can't, a lamp pair or oncoming motion
+      tr.obj_speed = self._motion_fit(tr, v_ego)
+      if sum(h.partner for h in tr.hist[-5:]) >= 3 or (np.isfinite(tr.obj_speed) and tr.obj_speed > p.oncoming_speed):
+        tr.reflector = False
+      else:
+        tr.obj_speed = float("nan")
+        tr.kind, tr.why = KIND_STATIC, "beam"
+        return
     recent = tr.hist[-5:]
     if sum(h.post for h in recent) * 2 > len(recent):  # unpaired and tall, however bright: lamps are round or wide
       tr.obj_speed = float("nan")
@@ -967,15 +1224,8 @@ class HbaClassifier:
       tr.obj_speed = float("nan")
       tr.kind, tr.why = KIND_STATIC, "roadside"  # roadside on our side: reflectors, parked cars, driveway markers
       return
-    seg = [h for h in tr.hist if h.t >= last.t - p.motion_s]
-    dists = np.array([h.dist for h in seg])
-    if (len(seg) >= p.motion_min_obs and seg[-1].t - seg[0].t >= 0.5 * p.motion_s and v_ego >= p.min_motion_v_ego
-        and np.isfinite(dists).all() and dists.max() < p.motion_max_dist):
-      ts = np.array([h.t for h in seg]) - seg[0].t
-      inv = 1.0 / np.clip(dists, 1.0, 2000.0)
-      slope = np.polyfit(ts, inv, 1)[0]   # d(1/d)/dt = closing / d^2
-      closing = slope * tr.dist ** 2
-      tr.obj_speed = closing - v_ego      # >0: coming at us, ~0: static, <0: moving away
+    tr.obj_speed = self._motion_fit(tr, v_ego)
+    if np.isfinite(tr.obj_speed):
       tr.why = "motion"
       if abs(tr.obj_speed) < p.static_speed:
         tr.kind = KIND_STATIC      # moves with the road: reflector, sign, parked car, house light
@@ -989,8 +1239,22 @@ class HbaClassifier:
       else:
         tr.kind = KIND_CANDIDATE
     else:
-      tr.obj_speed = float("nan")
       tr.kind, tr.why = (KIND_PRECEDING if red else KIND_CANDIDATE), "colour"
+
+  def _motion_fit(self, tr: Track, v_ego):
+    """The object's own speed from the inverse-depth slope over motion_s (>0 coming at us, ~0 static, <0 moving away),
+    NaN when the track can't support it: too short, too far (1 px of row is tens of metres), or we're too slow."""
+    p = self.p
+    last = tr.hist[-1]
+    seg = [h for h in tr.hist if h.t >= last.t - p.motion_s]
+    dists = np.array([h.dist for h in seg])
+    if not (len(seg) >= p.motion_min_obs and seg[-1].t - seg[0].t >= 0.5 * p.motion_s and v_ego >= p.min_motion_v_ego
+            and np.isfinite(dists).all() and dists.max() < p.motion_max_dist):
+      return float("nan")
+    ts = np.array([h.t for h in seg]) - seg[0].t
+    inv = 1.0 / np.clip(dists, 1.0, 2000.0)
+    slope = np.polyfit(ts, inv, 1)[0]   # d(1/d)/dt = closing / d^2
+    return slope * tr.dist ** 2 - v_ego
 
   def _ego_rotation(self, t, ang_vel):
     """Device rotation since the last frame, for predicting tracks. None without gyro.
@@ -1064,63 +1328,11 @@ class HbaClassifier:
     wide_threat = self._wide_update(t, wide, wide_euler, model, rpy_calib, height, geom, dark)
     out.n_wide = len(self._wide_hits) if wide_threat else 0
 
-    live = [tr for tr in self.tracks if tr.missed == 0 and tr.is_threat(p)]
-    out.n_oncoming = sum(tr.kind == KIND_ONCOMING for tr in live)
-    out.n_preceding = sum(tr.kind == KIND_PRECEDING for tr in live)
-    out.n_candidates = sum(tr.kind == KIND_CANDIDATE for tr in live)
     lead = max(((pr, x) for pr, x, _ in model["leads"]), default=(0.0, 0.0))
     out.lead_prob = lead[0]
     model_lead = lead[0] > p.lead_prob and lead[1] < p.lead_max_x
-    # a threat we're sure of (model lead, a big lamp, oncoming motion) says nothing about the last restore
-    confident = model_lead or wide_threat or any(tr.strong(p) or tr.kind == KIND_ONCOMING for tr in live)
-
-    reason = 0
-    if out.n_oncoming or out.n_candidates or wide_threat:
-      reason |= REASON_ONCOMING
-    if out.n_preceding or model_lead:
-      reason |= REASON_PRECEDING
-    out.threat = reason != 0
-    if not out.threat:
-      self._threat_since = None
-    elif self._threat_since is None:
-      self._threat_since = t
-
-    if v_ego > p.enable_v:
-      self._speed_ok = True
-    elif v_ego < p.disable_v:
-      self._speed_ok = False
-    if not self._speed_ok:
-      reason |= REASON_SPEED
-    if not dark:
-      reason |= REASON_TOO_BRIGHT
-    if out.town:
-      reason |= REASON_TOWN
-
-    # a threat we're sure of dips on its first frame; weak ones need dip_s (two frames) so one-frame flickers don't
-    dip = self._threat_since is not None and (confident or t - self._threat_since >= p.dip_s)
-    if dip or not self._speed_ok or not dark or out.town:
-      if (self._permitted and dip and not confident and self._permit_since is not None
-          and t - self._permit_since < p.short_permit_s):
-        self._clear_needed = min(2 * self._clear_needed, p.clear_max_s)  # restored too early: wait longer next time
-      self._permitted = False
-      self._permit_since = None
-      self._clear_since = None
-    elif not out.threat:
-      if self._clear_since is None:
-        self._clear_since = t
-      out.clear_for_s = t - self._clear_since
-      if out.clear_for_s >= self._clear_needed and not self._permitted:
-        self._permitted = True
-        self._permit_since = t
-      elif not self._permitted:
-        reason |= REASON_DELAY
-    if self._permitted and t - self._permit_since >= p.backoff_reset_s:
-      self._clear_needed = p.clear_s
-    out.clear_needed_s = self._clear_needed
-    out.high_beam_permitted = self._permitted
-    out.reason = 0 if self._permitted else reason
-    out.valid = True
-    return out
+    views = [tr.view(p) for tr in self.tracks if tr.missed == 0]
+    return self.policy.step(t, out, views, model_lead, wide_threat, v_ego, dark, bool(self._beam))
 
   def _wide_update(self, t, wide, wide_euler, model, rpy_calib, height, narrow: Geometry, dark):
     """Looks at the wide frame if there is one. Returns whether a wide lamp threatens (held for wide_hold_s)."""
@@ -1137,11 +1349,7 @@ class HbaClassifier:
   def _reset(self):
     self.tracks = []
     self._wide_hits, self._wide_t = [], None
-    self._threat_since = None
-    self._clear_since = None
-    self._permitted = False
-    self._permit_since = None
-    self._clear_needed = self.p.clear_s
+    self.policy.reset()
     self._beam_switches = []
     self._town_hist = []
     self._town = False
