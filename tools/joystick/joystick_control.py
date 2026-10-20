@@ -17,6 +17,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE
 from openpilot.starpilot.system.wheel_controls import connected_input_sources, selected_joystick_device
 from openpilot.tools.lib.kbhit import KBHit
+from openpilot.tools.joystick.steam_controller import SteamControllerReader
 
 EXPO = 0.4
 
@@ -27,6 +28,8 @@ CONTROLLER_PROFILES = {
   'Stadia':    {'name': 'Stadia',    'steer': 'ABS_X', 'accel': 'ABS_RZ', 'lo': 0.,      'hi': 255.},
   'X-Box':     {'name': 'Xbox',      'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': -32768., 'hi': 32767.},
   'DualSense': {'name': 'DualSense', 'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': 0.,      'hi': 255.},
+  # read over hidraw by steam_controller.py (no kernel driver on 4.9); axis names are labels only
+  'Steam':     {'name': 'Steam',     'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': -32768., 'hi': 32767.},
 }
 DEFAULT_PROFILE = 'X-Box'
 ABS_CODES = {'ABS_X': 0, 'ABS_Y': 1, 'ABS_Z': 2, 'ABS_RX': 3, 'ABS_RY': 4, 'ABS_RZ': 5}
@@ -71,6 +74,7 @@ class Joystick:
     self._source_id = ''
     self._event_path = ''
     self._event_fd = None
+    self._steam = SteamControllerReader()
     self._load_profile()
     self._rescan(force=True)
 
@@ -137,8 +141,13 @@ class Joystick:
       if self._event_fd is not None:
         cloudlog.info('joystick_control: selected controller disconnected')
       self._close_event()
-      self.axes_values = dict.fromkeys(self.axes_values, 0.)
+      if not self._steam.is_open:
+        self.axes_values = dict.fromkeys(self.axes_values, 0.)
+        if self._steam.open():
+          self._load_profile('Steam')
+          cloudlog.info(f"joystick_control: using Steam Controller at {', '.join(self._steam.fds.values())}")
       return
+    self._steam.close()
     if self._source_id == source.device_id and self._event_path == source.path and self._event_fd is not None:
       return
 
@@ -169,9 +178,29 @@ class Joystick:
     self.axes_values[event_name] = EXPO * norm ** 3 + (1 - EXPO) * norm
     return True
 
+  def _update_steam(self):
+    handled = self._steam.poll()
+    if not self._steam.is_open:
+      self.axes_values = dict.fromkeys(self.axes_values, 0.)
+      self.cancel = False
+      return False
+    s = self._steam.state
+    accel_axis, steer_axis = self.axes_order
+    # same layout as the other pads: left stick X steers, right stick Y is gas (up) / brake (down)
+    accel = s.right_y / 32767.
+    steer = -s.left_x / 32767.  # stick left = positive (left) torque
+    for axis, norm in ((accel_axis, accel), (steer_axis, steer)):
+      norm = float(np.clip(norm, -1., 1.))
+      norm = norm if abs(norm) > self.deadzone else 0.
+      self.axes_values[axis] = EXPO * norm ** 3 + (1 - EXPO) * norm
+    self.cancel = s.y_button
+    return handled
+
   def update(self):
     if not self.is_pc:
       self._rescan()
+      if self._steam.is_open:
+        return self._update_steam()
       if self._event_fd is None:
         time.sleep(0.1)
         return False
