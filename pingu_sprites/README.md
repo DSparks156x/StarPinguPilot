@@ -229,6 +229,7 @@ Checked top to bottom; the first match wins.
 |---|---|
 | melt | `thermalStatus` overheated or critical |
 | take_wheel | critical alert (`selfdriveState.alertStatus`) |
+| gamer / gamer_lean (mirrored for right) | joystick debug mode (`lateralControlState` is `debugState`); leans when the stick steers past 30% |
 | buckle | seatbelt unlatched or door open |
 | reverse | reverse gear |
 | hockey_stop | `aEgo` below -3 m/s² (plays 2.5 s) |

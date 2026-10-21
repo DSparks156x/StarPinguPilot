@@ -27,6 +27,7 @@ HARD_BRAKE = -3.         # m/s^2
 CURVE_ACCEL = 2.         # m/s^2 lateral before Pingu leans into it
 HIGHWAY_SPEED = 29.      # m/s, ~65 mph
 SPEEDING_MARGIN = 1.1    # over the mapd limit, plus 1 m/s
+GAMER_LEAN = 0.3         # joystick steer command (-1..1) before Pingu leans with it
 HOLD_TIME = 2.           # s to keep short events on screen so they don't flicker
 IDLE_EXTRA_EVERY = (15., 40.)
 IDLE_EXTRAS = ("look_around", "giggle", "fishing", "fish_snack", "snowman", "juggle")
@@ -113,6 +114,12 @@ class TamagotchiWidget(Widget):
       return "melt", False
     if ss.alertStatus == AlertStatus.critical:
       return "take_wheel", False
+    # joystick debug mode: controlsd hands lateral to the joystick, same check as selfdrived
+    if sm["controlsState"].lateralControlState.which() == "debugState":
+      steer = sm["carControl"].actuators.torque
+      if abs(steer) > GAMER_LEAN:
+        return "gamer_lean", steer < 0  # the art leans left, mirror it for right
+      return "gamer", False
     if cs.seatbeltUnlatched or cs.doorOpen:
       return "buckle", False
     if cs.gearShifter == GearShifter.reverse:
@@ -204,7 +211,7 @@ class TamagotchiWidget(Widget):
       self._frame = 0
       self._last_update = now
 
-    info = self._anims[self._anim]
+    info = self._anims.get(self._anim, self._anims["idle"])  # sheet older than this code
     if now - self._last_update > 1.0 / FPS:
       if info["loop"]:
         self._frame = (self._frame + 1) % info["frames"]

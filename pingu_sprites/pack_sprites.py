@@ -84,6 +84,8 @@ STRIP_ANIMS = {
   "referee":     ("referee.png",     6, True,  0, "h", 1.0),
   "hockey_stop": ("hockey_stop.png", 6, False, 5, "h", 1.0),
   "green_light": ("green_light.png", 6, False, 0, "belly", 1.0),
+  "gamer":       ("gamer.png",       6, True,  0, "h", 1.0),
+  "gamer_lean":  ("gamer_lean.png",  4, True,  0, "h", 0.95),
 }
 
 KEY = np.array([250.0, 4.0, 252.0])
