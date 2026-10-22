@@ -147,7 +147,9 @@ class HbaParams:
   # saturated core is 2.2-4.9x the core on lit signs (p10-p90, yellow diamonds and white squares), 7.8-93x on oncoming
   # headlights (6f, 5a, 46; < 5x on 0.3-0.5 % of their far frames, nearly all lamp pairs or motion-smeared).
   glow_y: int = 70
-  glow_ratio: float = 5.0           # a core at least glow_min_core big whose glow is under this many times its area...
+  glow_ratio: float = 6.0           # a core at least glow_min_core big whose glow is under this many times its area...
+                                    # (lit signs hover at 4.6-5.0 for seconds as they come in, 6f seg 12; cars under our
+                                    # beam start at 7.8; < 6 on 0.6-1.1 % of car frames, nearly all lamp pairs)
   glow_min_core: int = 30           # ...is compact; small far cores are too few pixels to tell
   glow_max_core: int = 600          # ...and a core bigger than this is a lamp right in front of us, not a far sign
   near_band_m: float = 30.0         # a light whose ray is only at lamp height closer than this...

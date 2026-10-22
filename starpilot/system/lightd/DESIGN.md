@@ -999,17 +999,30 @@ whose flare spreads far past its core; a lit sign is a surface just over saturat
 3. Far weak evidence splits pairs: a second blob on the row (a lamp partner) keeps 4/s, one wide blob (two merged
    lamps or a small white plate, most of the dots left on 6f) gets `ev_wide` = 1/s.
 
-**Results** (full video replay of the new code on all three drives, `runs/g6f`, `runs/g5a`, `runs/g46`, policy_sim for
-the last two rate changes; "before" = the code on the car, dabc18ed):
+4. `glow_ratio` threshold 6, not 5: the seg 12 yellow sign sat at 4.6-5.0 for 2 s as it came in; cars under our beam
+   start at 7.8 (p10), < 6 on 0.6-1.1 % of car frames (lamp pairs, vetoed by the partner rule).
+
+**Results** (full video replay of the final code on all three drives, `runs/h6f`, `runs/h5a`, `runs/h46`; it agrees
+with policy_sim on 99-99.5 % of frames; "before" = the code on the car, dabc18ed):
 
 | | 6f before | 6f now | 5a before | 5a now | 46 before | 46 now |
 |---|---|---|---|---|---|---|
-| glare s | 1.1 | 1.6 | 1.5 | 1.4 | 2.0 | 1.5 |
-| nuisance s | 287 | 231 | 245 | 215 | 178 | 147 |
-| toggles / min | 2.26 | 2.07 | 2.19 | 1.83 | 1.78 | 1.30 |
+| glare s | 1.1 | 1.6 | 1.5 | 1.7 | 2.0 | 1.6 |
+| nuisance s | 287 | 219 | 245 | 205 | 178 | 143 |
+| toggles / min | 2.26 | 2.07 | 2.19 | 1.83 | 1.78 | 1.42 |
 
 6f glare +0.5 s is one far car (seg 21, a single dot for ~1 s before its lamps separate) that the old code happened to
-be dipped for a sign at. The other glare changes are each < 0.5 s on cars at 140-230 m.
+be dipped for a sign at. The 5a +0.2 s are two cars at 140-230 m (`rundiff.py`). Replay time per frame 14.4 -> 14.9 ms.
+
+**Tried and not changed** (measured on these drives):
+- The orange construction diamond reaches the red (taillight) path at hue 7-8 with an orange halo and no white core,
+  but any rule strict enough to catch it (halo orange >= 0.35-0.7, no core, hue >= 6-7) also matches 2-5 % of real
+  taillight frames and 25-100 taillight tracks on most frames (`redsel.py`, `redfeat.py`). One sign is not worth that.
+- Lowering `glow_min_core` below 30 px: small-core signs are not compact anyway (glow >= 5); nothing to gain.
+- Town: on 6f the town flag is on 166 s at 60-80 km/h, and those frames are a signalised town edge, streetlights with
+  cars ahead, a 45 mph sign: right. SmartBeam's "town only blocks switch-on" variant changes nothing measurable here.
+  mapd publishes no speed limit on the car (none in 6f's rlogs), so the posted-limit town input never fires; with it,
+  rural yard-light clusters next to a 55-65 mph limit could be told apart from towns.
 
 Under the driver's high beam on 6f the HBA now agrees 67 % of the time (57 % before) and the big-sign dips are gone, but
 26 dips remain in 8.7 min: 8 red (dim red post reflectors, the orange construction diamond; the red path is left fast on
