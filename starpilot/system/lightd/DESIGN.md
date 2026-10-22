@@ -950,3 +950,73 @@ replay matched policy_sim on 99.9 % of frames before it); 71 lightd tests pass.
 5. **Exposure**: `hba.py` thresholds are raw pixel values and never see `exposureValPercent` or gain. If auto exposure
    reacts to our own high beam, every brightness test moves with our switching. Log both into the track csv and check.
 6. Speed band: SmartBeam stays on down to 28 km/h once on (switch-on 58); ours drops at 50.
+
+
+## 13. Drive 3 (route `0000006f`, 2026-10-20): lit signs, measured (2026-10-21)
+
+**The drive.** ~28 min at night on the usual route, device build a02b2a39 (contains section 12). HBA in control for
+segment 11 only (three on-periods of 4.4 / 0.7 / 0.1 s, each ended by reason "oncoming"), then the driver held the high
+beam on by hand for 8.7 of the 15.5 dark minutes at speed (segs 12-22) while lightd kept deciding. `starpilotLightState`
+is in the rlogs now (loggerd rebuilt): hbaProcessingMs p50 21 / p95 46 ms on the device, up from 6-14 ms measured on the
+corpus. (`wideFrameAgeMs` reads 0 because lightd polls on wide frames; it says nothing about the wide guard.)
+
+The manual stretch is the first closed-loop data: the scene is lit by our own high beam and the HBA's decisions don't
+change it, so the replay reproduces the car exactly (99.3 % of frames agree with the logged permit). Every HBA dip there
+with no car is a false dip under our high beam, and the driver's own dips label the real cars.
+
+**What the HBA dipped for under the driver's high beam** (35 dips in segs 11-25, every one looked at,
+`hba_tools/runs/r6f_look/`): none clearly a car. ~12 big lit signs (yellow diamond warning signs at the apex of
+curves, straight ahead in the corridor, with a burnt-out white middle; white regulatory squares; an orange construction
+diamond read as a red light); ~20 small dots (delineators and post reflectors at 20-180 m that dipped 0.1-0.3 s after
+birth, before the motion fit could call them static; small white plates far ahead).
+
+**Why the big signs got through.** The middle of a lit sign saturates, so the white blob is the burnt-out middle and
+its surroundings are the sign's own bright face: the crisp-ring test ("lamps bloom, reflectors don't") sees bloom. The
+yellow-surround test can't help either: halogen headlights are as yellow (`blobfeat.py`, halo yellow fraction p50 0.49
+on cars vs 0.65 on signs).
+
+**What separates them, measured** (`blobsel.py` + `blobfeat.py`: 241 lit-sign frames from 6f, 3310 far strong frames of
+hindsight oncoming cars on 6f/5a/46): the area at Y >= 70 connected to the saturated core, over the core's area.
+
+| glow / core | p10 | p50 | p90 |
+|---|---|---|---|
+| lit signs | 2.2 | 2.8 | 4.9 |
+| oncoming headlights, our beam off | 11 | 27 | 93 |
+| oncoming headlights, our beam on | 7.8 | 15 | 30 |
+
+At < 5: 93 % of sign frames and every sign track (on most of its frames), 0.3-0.5 % of car frames per drive, which by eye
+are motion-smeared or side-on lamp *pairs*, one huge near car, a traffic light. A lamp is a tiny source of huge radiance
+whose flare spreads far past its core; a lit sign is a surface just over saturation whose glow ends at its edge.
+
+**Changes** (`hba.py`):
+1. `glow_ratio()` on every white blob with a 30-600 px core, from the whole frame's Y plane (never a crop: a lamp's flare
+   cut off at a crop edge would look compact; the first version ran on the converted crops and measured nothing). A
+   track compact on most of its last 5 frames is static "sign" unless it shows a lamp partner on 3 of them or measured
+   oncoming motion; the glare override leaves it alone.
+2. A weak (not bright) white light inside 70 m under our high beam builds evidence at 1.5/s instead of 6/s, so the
+   motion fit (0.7 s) classifies the delineators first. Not for red lights (a far car's dim taillights got a 17 m range
+   on 6f seg 14) and not for a lamp pair (6f seg 21, a real car whose lamps ranged at 40 m).
+3. Far weak evidence splits pairs: a second blob on the row (a lamp partner) keeps 4/s, one wide blob (two merged
+   lamps or a small white plate, most of the dots left on 6f) gets `ev_wide` = 1/s.
+
+**Results** (full video replay of the new code on all three drives, `runs/g6f`, `runs/g5a`, `runs/g46`, policy_sim for
+the last two rate changes; "before" = the code on the car, dabc18ed):
+
+| | 6f before | 6f now | 5a before | 5a now | 46 before | 46 now |
+|---|---|---|---|---|---|---|
+| glare s | 1.1 | 1.6 | 1.5 | 1.4 | 2.0 | 1.5 |
+| nuisance s | 287 | 231 | 245 | 215 | 178 | 147 |
+| toggles / min | 2.26 | 2.07 | 2.19 | 1.83 | 1.78 | 1.30 |
+
+6f glare +0.5 s is one far car (seg 21, a single dot for ~1 s before its lamps separate) that the old code happened to
+be dipped for a sign at. The other glare changes are each < 0.5 s on cars at 140-230 m.
+
+Under the driver's high beam on 6f the HBA now agrees 67 % of the time (57 % before) and the big-sign dips are gone, but
+26 dips remain in 8.7 min: 8 red (dim red post reflectors, the orange construction diamond; the red path is left fast on
+purpose), 3 near lights just under the 30 px glow floor, ~15 small far white dots (two reflectors side by side, tiny
+plates 100-570 m out). At that size no single-frame test separates them from a distant car.
+
+**Next.** The far dots need time and data, not another gate: 6f's manual stretch is the first set of labelled negatives
+under our own high beam (8.7 min, the driver dipped for the real cars). With the new per-track columns (`partner`,
+`compact`) and three drives, the learned per-track classifier of section 11 can be retrained with those negatives and
+evaluated leave-one-drive-out. Also open: the orange sign on the red path (hue), the device CPU rise.

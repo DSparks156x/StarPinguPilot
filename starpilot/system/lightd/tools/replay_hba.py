@@ -41,7 +41,7 @@ FRAME_COLS = ("seg", "idx", "t", "frame_id", "truth", "v", "dark", "high_beam", 
               "n_preceding", "n_candidates", "lead_prob", "town", "town_lights", "lamp", "n_wide", "ms")
 WIDE_COLS = ("seg", "idx", "t", "u", "v", "area", "peak", "chroma", "ring", "reach", "lamp", "permitted")
 TRACK_COLS = ("seg", "t", "frame_id", "tid", "u", "v", "pred_err", "area", "peak", "red", "paired", "post", "flux", "sat", "dist",
-              "lateral", "kind", "why", "obj_speed", "age", "reflector", "threat", "label")
+              "lateral", "kind", "why", "obj_speed", "age", "reflector", "threat", "label", "partner", "compact")
 KIND_BGR = {"oncoming": (0, 0, 255), "preceding": (0, 165, 255), "candidate": (255, 0, 255), "static": (0, 200, 0)}
 
 
@@ -416,7 +416,8 @@ def main():
                          "red": int(h[6]), "paired": int(h[9]), "post": int(h[10]), "flux": getattr(h, "flux", 0),
                          "sat": getattr(h, "sat", 0), "dist": tr.dist, "lateral": tr.lateral, "kind": tr.kind, "why": getattr(tr, "why", ""),
                          "obj_speed": tr.obj_speed, "age": getattr(tr, "age_s", getattr(tr, "age", 0)),
-                         "reflector": int(getattr(tr, "reflector", False)), "threat": int(tr.is_threat(clf.p))})
+                         "reflector": int(getattr(tr, "reflector", False)), "threat": int(tr.is_threat(clf.p)),
+                         "partner": int(getattr(h, "partner", False)), "compact": int(getattr(h, "compact", False))})
         changed = last_permit is not None and out.high_beam_permitted != last_permit
         last_permit = out.high_beam_permitted
         wanted = (n, idx // 2) in jpg_at  # video index at 20 Hz, --at in tenths of a second

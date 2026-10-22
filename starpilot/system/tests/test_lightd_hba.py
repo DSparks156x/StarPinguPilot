@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import numpy as np
 import pytest
@@ -340,6 +342,59 @@ def test_a_short_dip_stays_low_for_the_minimum_time():
   dip = _first_dip(outs)
   low = dip * DT + _restore_after(clf, 6.0 + len(near) * DT) + (len(near) - dip - 1) * DT
   assert low == pytest.approx(clf.p.min_low_s[0], abs=2 * DT)  # FAST is above min_low_v[1]
+
+
+def _lit_sign_frame(geom, x, y, core=5, face=3, bg=45):
+  """A sign lit by our high beam: a burnt-out white middle in a yellow face that ends at its edge, on the faintly lit
+  night scene our high beam makes (route 6f: Y ~55 around signs)."""
+  img = np.full((FCAM_H, FCAM_W, 3), bg, np.uint8)
+  uv, ok = geom.project(np.array([[x, y, HEIGHT - 0.7]]))
+  u, v = (int(round(c)) for c in uv[0])
+  r = core + face
+  img[v - r:v + r + 1, u - r:u + r + 1] = (0, 200, 230)
+  img[v - core:v + core + 1, u - core:u + core + 1] = 255
+  return img
+
+
+def test_a_lit_sign_is_static_and_a_blooming_lamp_is_not():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  # the sign: compact glow, under our high beam, straight ahead where the road bends away
+  clf = HbaClassifier()
+  run(clf, [np.full((FCAM_H, FCAM_W, 3), 45, np.uint8)] * 120, high_beam_on=True)
+  outs = run(clf, [_lit_sign_frame(geom, 150.0, 0.0)] * 40, t0=6.0, high_beam_on=True)
+  assert all(o.high_beam_permitted for o in outs)
+  assert {tr.why for tr in clf.tracks if tr.missed == 0} == {"sign"}
+  # a lamp the same size whose flare spreads far past its core dips
+  clf = HbaClassifier()
+  run(clf, [np.full((FCAM_H, FCAM_W, 3), 45, np.uint8)] * 120, high_beam_on=True)
+  lamp = add_light(np.full((FCAM_H, FCAM_W, 3), 45, np.uint8), geom, 150.0, -3.6, 0.7, radius=5)
+  outs = run(clf, [lamp] * 40, t0=6.0, high_beam_on=True)
+  assert not outs[-1].high_beam_permitted
+
+
+def test_a_compact_lamp_pair_is_not_a_sign():
+  # smeared or side-on headlights can look compact; a sign doesn't have a twin on its row
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  pair = np.maximum(_lit_sign_frame(geom, 150.0, -2.8, core=3, face=1), _lit_sign_frame(geom, 150.0, -4.8, core=3, face=1))
+  clf = HbaClassifier()
+  run(clf, [np.full((FCAM_H, FCAM_W, 3), 45, np.uint8)] * 120, high_beam_on=True)
+  outs = run(clf, [pair] * 40, t0=6.0, high_beam_on=True)
+  assert not outs[-1].high_beam_permitted
+  assert "sign" not in {tr.why for tr in clf.tracks if tr.missed == 0}
+
+
+def test_a_faint_near_light_waits_for_the_motion_fit_under_our_high_beam():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  dot = frame_with_light(geom, 45.0, -3.6, 0.7, radius=1)  # what our high beam lights 45 m out: a delineator
+  t_dip = {}
+  for hb in (False, True):
+    clf = HbaClassifier()
+    run(clf, [dark_frame()] * 120, high_beam_on=hb)
+    outs = run(clf, [dot] * 20, t0=6.0, high_beam_on=hb)
+    i = _first_dip(outs)
+    t_dip[hb] = math.inf if i is None else (i + 1) * DT
+  assert t_dip[False] <= 1.0 / HbaParams().ev_near + DT + 1e-9
+  assert t_dip[True] >= min(1.0 / HbaParams().ev_near_hb, HbaParams().motion_s) - DT
 
 
 def test_legacy_policy_is_still_there():

@@ -141,6 +141,15 @@ class HbaParams:
   crisp_min_area: int = 16          # lamps bloom, retroreflectors don't: a white blob at least this big whose
   crisp_ring_v: int = 32            # surroundings have a median V under this is a sign or reflector lit by our beams.
                                     # Route 46: signs and post reflectors 13-24, headlights 41-128. Small far blobs overlap.
+  # lamps bloom, lit signs don't, measured one level lower: a lamp is a tiny source of huge radiance whose flare spreads
+  # far past its saturated core; a sign lit by our high beam is a surface just over saturation, and its glow ends at the
+  # sign's edge (its own bright face is what defeats crisp_ring_v). Route 6f: the area at Y >= glow_y around a
+  # saturated core is 2.2-4.9x the core on lit signs (p10-p90, yellow diamonds and white squares), 7.8-93x on oncoming
+  # headlights (6f, 5a, 46; < 5x on 0.3-0.5 % of their far frames, nearly all lamp pairs or motion-smeared).
+  glow_y: int = 70
+  glow_ratio: float = 5.0           # a core at least glow_min_core big whose glow is under this many times its area...
+  glow_min_core: int = 30           # ...is compact; small far cores are too few pixels to tell
+  glow_max_core: int = 600          # ...and a core bigger than this is a lamp right in front of us, not a far sign
   near_band_m: float = 30.0         # a light whose ray is only at lamp height closer than this...
   near_band_area: int = 80          # ...and is smaller than this is not a lamp: a car that close would be huge
   roadside_angle_deg: float = 3.3   # off-path angle on the non-oncoming side beyond which a light is roadside
@@ -184,7 +193,13 @@ class HbaParams:
   ev_strong_far: float = 6.0        # ...farther (or no range), our high beam off: two frames
   ev_strong_hb: float = 2.5         # ...farther, our high beam on: the signs it lights are far, big and saturated
   ev_near: float = 6.0              # weak light inside motion_max_dist
-  ev_pair: float = 4.0              # weak far light with a lamp partner over pair_window_s
+  ev_near_hb: float = 1.5           # ...white, with our high beam on: what it lights up there are delineators and post
+                                    # reflectors (a car's lamps that close are bright), so give the motion fit (motion_s)
+                                    # time. Not red (a far car's dim taillights get a range that short too) and not a lamp
+                                    # pair (a far car's headlights, route 6f seg 21)
+  ev_pair: float = 4.0              # weak far light with a lamp partner (a second blob on its row) over pair_window_s
+  ev_wide: float = 1.0              # weak far light that is one wide blob: two lamps merged, or (route 6f, most of the
+                                    # dips left under our high beam) a small white plate or reflector far ahead: 1 s
   ev_lone: float = 0.5              # weak far lone dot: 2 s (the rules never dipped for these; a far car is one)
   ev_static: float = -2.0           # classified static: evidence drains
   ev_missing: float = -3.0          # a lost track's evidence drains this fast; a re-detection near it inherits it...
@@ -250,6 +265,7 @@ class Blob:
   hue: int = 0
   paired: bool = False  # has a same-colour partner on its row, or is a wide blob (two lamps merged)
   partner: bool = False # the first of those only: a wide blob is also what a sign lit by our beam looks like
+  glow: float = math.inf  # area at Y >= glow_y connected to the core / core area (inf: not measured or spreading wide)
   post: bool = False    # tall white rectangle without a partner: delineator reflector, not a lamp
 
 
@@ -270,6 +286,7 @@ class Obs(NamedTuple):
   high: bool    # its ray never passes through the lamp band over the road (or only right next to us, and the blob
                 # is small): building, sign, streetlight
   partner: bool = False  # paired by a second blob on its row, not by being wide
+  compact: bool = False  # a saturated core whose glow ends close around it: a lit sign (glow_ratio)
 
 
 @dataclass
@@ -303,6 +320,10 @@ class Track:
     recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
     return sum(h.paired for h in recent) >= p.pair_min
 
+  def partner_recent(self, p):
+    recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
+    return sum(h.partner for h in recent) >= p.pair_min
+
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
       return False
@@ -318,7 +339,7 @@ class Track:
     o = self.hist[-1]
     far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
     return TrackView(self.tid, o.u, o.v, self.kind, self.why, self.strong(p), self.is_threat(p), not far,
-                     self.paired_recent(p), self.reflector, o.area)
+                     self.paired_recent(p), self.reflector, o.area, self.partner_recent(p))
 
 
 class TrackView(NamedTuple):
@@ -335,6 +356,7 @@ class TrackView(NamedTuple):
   paired: bool     # a lamp pair on pair_min frames of pair_window_s
   reflector: bool
   area: float = 0.0
+  partner: bool = False  # paired by a second blob on its row (not by being one wide blob) on pair_min frames
 
 
 @dataclass
@@ -675,12 +697,18 @@ def find_blobs(frame, mask, p: HbaParams, red_mask=None, box=None):
       white[ys, xs] = cv2.bitwise_and(wr, m[ys, xs])
       red[ys, xs] = cv2.bitwise_and(rr, (m if rm is None else rm)[ys, xs])
     blobs = blobs_in(gray, hsv, white, red, p)
+    lum = frame.y
   else:
     blobs = find_blobs_in(frame[oy:oy + ch, ox:ox + cw], m, p, rm)
+    lum = None
   for b in blobs:
     b.u += ox
     b.v += oy
     b.bbox = (b.bbox[0] + ox, b.bbox[1] + oy, b.bbox[2], b.bbox[3])
+    if not b.red and p.glow_min_core <= b.area <= p.glow_max_core:
+      if lum is None:
+        lum = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+      b.glow = glow_ratio(lum, b, p)
   return blobs
 
 
@@ -782,6 +810,30 @@ def blobs_in(y, hsv, white, red, p: HbaParams):
   for a in blobs:
     a.post = a.post and not a.paired
   return blobs
+
+
+def glow_ratio(lum, b: Blob, p: HbaParams):
+  """Area of the lum >= glow_y region connected to the blob's saturated core, over the blob's area; inf if that region
+  reaches the edge of a window four blob-sizes out (or the image's), i.e. spreads like a lamp's flare. lum: the whole
+  frame's luma (the NV12 Y plane), never a crop: a flare cut off at a crop's edge would look compact."""
+  x0, y0, w, h = b.bbox
+  pad = 4 * max(w, h, 3)
+  H, W = lum.shape
+  ya, yb, xa, xb = y0 - pad, y0 + h + pad, x0 - pad, x0 + w + pad
+  if ya < 0 or xa < 0 or yb > H or xb > W:
+    return math.inf
+  win = lum[ya:yb, xa:xb]
+  glow = cv2.threshold(win, p.glow_y - 1, 1, cv2.THRESH_BINARY)[1]
+  _, lab = cv2.connectedComponents(glow, connectivity=8)
+  core = np.zeros(win.shape, bool)
+  core[pad:pad + h, pad:pad + w] = win[pad:pad + h, pad:pad + w] >= p.white_y
+  ids = np.unique(lab[core & (lab > 0)])
+  if not len(ids):
+    return math.inf
+  region = np.isin(lab, ids)
+  if region[0, :].any() or region[-1, :].any() or region[:, 0].any() or region[:, -1].any():
+    return math.inf
+  return float(region.sum()) / b.area
 
 
 def town_lights(frame, geom: Geometry, center, mask, p: HbaParams, box=None):
@@ -962,8 +1014,10 @@ class HbaPolicy:
         return p.ev_strong
       return p.ev_strong_hb if high_beam_on else p.ev_strong_far
     if tv.near:
-      return p.ev_near
-    return p.ev_pair if tv.paired else p.ev_lone
+      return p.ev_near_hb if high_beam_on and tv.kind != KIND_PRECEDING and not tv.paired else p.ev_near
+    if tv.partner:
+      return p.ev_pair
+    return p.ev_wide if tv.paired else p.ev_lone
 
   def _evidence(self, t, views, v_ego, high_beam_on):
     """Integrates each track's evidence over dt; returns {tid: evidence}."""
@@ -1154,7 +1208,8 @@ class HbaClassifier:
     if rh is not None:
       in_band = (rh[1][1:] >= p.lamp_low - p.band_slack) & (rh[1][1:] <= p.lamp_high + p.band_slack)
       high = not in_band.any() or (b.area < p.near_band_area and center[in_band, 0].max() < p.near_band_m)
-    return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner)
+    return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner,
+               b.glow < p.glow_ratio)
 
   def _beam_check(self, tr: Track):
     """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
@@ -1183,7 +1238,8 @@ class HbaClassifier:
     last = tr.hist[-1]
     oncoming_side = not np.isfinite(last.angle) or p.oncoming_side * last.angle > -p.glare_side_deg
     if (tr.strong(p) and not last.red and not last.high and not last.post and oncoming_side and tr.kind == KIND_STATIC
-        and not tr.reflector):  # a light that followed our own switching is a sign, however bright
+        and not tr.reflector and tr.why != "sign"):  # a light that followed our own switching, or whose glow ends at
+                                                     # its edge, is a sign, however bright
       tr.kind, tr.why = KIND_ONCOMING, "glare"
 
   def _classify_frame(self, tr: Track, v_ego, center):
@@ -1204,6 +1260,13 @@ class HbaClassifier:
         tr.kind, tr.why = KIND_STATIC, "beam"
         return
     recent = tr.hist[-5:]
+    if sum(h.compact for h in recent) * 2 > len(recent) and sum(h.partner for h in recent) < 3:
+      # its glow ends at its edge: a sign our beams light, not a lamp (unless it shows a lamp pair, or moves at us)
+      tr.obj_speed = self._motion_fit(tr, v_ego)
+      if not (np.isfinite(tr.obj_speed) and tr.obj_speed > p.oncoming_speed):
+        tr.obj_speed = float("nan")
+        tr.kind, tr.why = KIND_STATIC, "sign"
+        return
     if sum(h.post for h in recent) * 2 > len(recent):  # unpaired and tall, however bright: lamps are round or wide
       tr.obj_speed = float("nan")
       tr.kind, tr.why = KIND_STATIC, "post"  # delineator post
