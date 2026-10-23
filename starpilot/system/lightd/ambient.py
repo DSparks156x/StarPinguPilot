@@ -10,8 +10,9 @@ Two channels share one absolute threshold:
   fast (tau 0.3 s): tunnels and garages. Needs a sudden drop well below the slow channel, held for
                     min(dwell time, dwell distance), so highway underpasses (<1 s, <35 m in logged
                     drives) and dusk shadow flicker don't trigger it.
-The sun only adds a night latch, so bright streets after sunset can't turn the lights off.
-Tuned on 108 Audi TT drives, May-June 2026 (Fort Collins), see DESIGN.md.
+The sun adds a night latch, so bright streets after sunset can't turn the lights off, and raises the threshold while
+it is low (a dim scene at sun +6 deg only gets darker; the same reading at noon is a cloud).
+First tuned on 108 Audi TT drives, May-June 2026; re-anchored on the StarPilot-era Front Range drives, Oct 2026 (DESIGN.md §14).
 """
 import math
 from dataclasses import dataclass, field
@@ -35,14 +36,20 @@ class CameraSample:
 
 @dataclass
 class AmbientParams:
-  k_wide: float = 23.0      # stops -> roughly log2(lux); places clear-sky sunset near 400-700 lux
+  k_wide: float = 23.0      # stops -> roughly log2(lux)
   k_narrow: float = 22.4    # narrow reads ~0.6 stop brighter than wide at dusk (summer replay), only used as fallback
-  on_threshold: float = 9.8   # log2 lux; clear evenings cross it at sun ~+5 deg (~30 min before sunset)
+  # Thresholds are in the units of the current camerad (exact EV), anchored on Front Range drives, Oct 2026 (DESIGN.md §14).
+  # The old 9.8 was fit on Tahoe forest roads in logs that decoded 0.48 stop dark (max_ev was 1684 lines there).
+  on_threshold: float = 11.2  # clear open-terrain evenings cross it at sun ~+2.5 deg; keeps clear/overcast days off
+  twilight_boost: float = 1.0       # extra stops while the sun is low: lights on early cost nothing when it only gets darker
+  twilight_boost_hi: float = 10.0   # sun elevation where the boost starts...
+  twilight_boost_lo: float = 6.0    # ...and where it is full (clear evenings then cross at ~+5 deg)
   hysteresis: float = 0.8     # stops above the threshold before releasing
   sensitivity: float = 0.0    # user offset in stops, + turns lights on earlier
   tau_slow: float = 20.0
   tau_fast_dark: float = 0.3
   tau_fast_light: float = 1.0
+  tunnel_threshold: float = 10.3  # fast channel's own level: the old 9.8 in exact-EV units, where underpasses were validated
   tunnel_drop: float = 3.0        # fast must be this far below slow, so gradual dusk/storms stay on the slow channel
   tunnel_dwell_s: float = 2.0     # fast channel must stay dark this long...
   tunnel_dwell_m: float = 60.0    # ...or this far, whichever comes first
@@ -81,6 +88,14 @@ def scene_stops(grey: float, ev_percent: float, min_ev: float = OS04C10_MIN_EV, 
   linear = g / (10.0 - 9.0 * g)  # inverse of the OS04C10 gamma 10x / (1 + 9x)
   ev = min_ev + min(max(ev_percent, 0.0), 100.0) / 100.0 * (max_ev - min_ev)
   return math.log2(linear) - math.log2(ev)
+
+
+def twilight_boost(p: "AmbientParams", solar_elev: float | None) -> float:
+  """Raises the threshold as the sun gets low, ramping from 0 at twilight_boost_hi to full at twilight_boost_lo."""
+  if solar_elev is None or p.twilight_boost_hi <= p.twilight_boost_lo:
+    return 0.0
+  frac = (p.twilight_boost_hi - solar_elev) / (p.twilight_boost_hi - p.twilight_boost_lo)
+  return p.twilight_boost * min(max(frac, 0.0), 1.0)
 
 
 def ema(prev: float, x: float, dt: float, tau: float) -> float:
@@ -146,7 +161,7 @@ class AmbientEstimator:
       self._tunnel = cue if self._tunnel is None else ema(self._tunnel, cue, dt, 0.5)
       out.tunnel_cue = self._tunnel
 
-    on = p.on_threshold + p.sensitivity
+    on = p.on_threshold + p.sensitivity + twilight_boost(p, solar_elev)
     off = on + p.hysteresis
     out.on_threshold = on
 
@@ -157,7 +172,8 @@ class AmbientEstimator:
       self._dark_slow = False
 
     # fast channel: tunnels and garages, ignoring short underpasses
-    if self._fast < on and (self._dark_tunnel or self._slow - self._fast >= p.tunnel_drop):
+    tun_on = p.tunnel_threshold + p.sensitivity
+    if self._fast < tun_on and (self._dark_tunnel or self._slow - self._fast >= p.tunnel_drop):
       self._below_s += dt
       self._below_m += dt * max(v_ego, 0.0)
       self._above_s = 0.0
@@ -165,7 +181,7 @@ class AmbientEstimator:
         self._dark_tunnel = True
     else:
       self._below_s = self._below_m = 0.0
-      self._above_s = self._above_s + dt if self._fast > off else 0.0
+      self._above_s = self._above_s + dt if self._fast > tun_on + p.hysteresis else 0.0
       if self._above_s >= p.tunnel_release_s:
         self._dark_tunnel = False
 

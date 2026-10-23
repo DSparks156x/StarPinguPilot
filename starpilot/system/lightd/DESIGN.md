@@ -1033,3 +1033,58 @@ plates 100-570 m out). At that size no single-frame test separates them from a d
 under our own high beam (8.7 min, the driver dipped for the real cars). With the new per-track columns (`partner`,
 `compact`) and three drives, the learned per-track classifier of section 11 can be retrained with those negatives and
 evaluated leave-one-drive-out. Also open: the orange sign on the red path (hue), the device CPU rise.
+
+## 14. Low beam re-anchored on the Front Range (2026-10-22, after route `0000008c`)
+
+**Trigger.** On drive `8c` (17:29-17:52 MDT, heavy overcast, sun +6.6 -> +2.6 deg) the lights came on only at 17:49:31
+(sun +3.1). Most other cars had theirs on from the start, and the driver agreed they should have been on. The earlier
+drives that day (8a, 8b, 87, 88: sun >= 10.6, overcast or hazy) were right to stay off. G397 is no reference in
+StarPilot-era logs: the cargo box obstructs it, and it turned the lights on at drive start even at sun 10.6.
+
+**Cause 1: EV scale.** The old camerad computed OS04C10 `max_ev` from 1684 lines, while the mici downscale mode ran to
+2352. So the summer logs' `exposureValPercent` was scaled to ~14300, but section 2 decodes it with 19992. Those logs read
+0.48 stop dark at dusk (1.31 at the tiny daytime EVs, where the min offset matters). Since StarPilot, EV(perc) /
+(integLines * gain) = 1.00, so the same scene reads 0.48 stop brighter than the scale the 9.8 threshold was fit on.
+`exposureValPercent` is the frame-aligned EV; `integLines * gain` is the next commanded EV.
+
+**Cause 2: where the threshold was fit.** All summer dusk segments were South Lake Tahoe forest roads with the Sierra
+crest to the west. Exact-EV band medians at sun 4-6 deg: Tahoe 10.39, clear open Front Range in October 12.26. So with
+9.8, clear evenings here were switched only by the night latch at sunset.
+
+**Not the cause: sky in the AE band.** Offline pixel study (`carstuff/logs/lowbeam_tools/`, wide video of 8a-8c, 30, 31,
+3b, 40, 41, 87, 88): the wide AE band is ~36 % sky, ~34 % road, ~30 % hood/dash. A ground ROI (-2 to -12 deg below the
+horizon) reads within 0.2 stop of the band. Overcast does read 0.7-1.4 stops darker than clear at equal sun, and sky
+metrics are the most weather- and heading-dependent. So the band stays.
+
+**Changes (`ambient.py`).**
+- K stays 23.0 / 22.4; thresholds are now in exact-EV units.
+- `on_threshold` 9.8 -> 11.2: the highest level with daytime margin on the logged clear/overcast days (lowest 20 s
+  average there ~11.6). Clear open-terrain evenings cross it at sun ~+2.5 deg.
+- `twilight_boost` +1.0 stop, ramping from sun +10 deg (0) to +6 deg (full). A dim scene at sun +6 only gets darker; the
+  same reading at noon is a cloud. That brightness alone can't tell them apart is why the sun is in it at all. With it,
+  clear evenings cross at ~+5 deg (section 3's original intent), and 8c is on from its first valid frame.
+- `tunnel_threshold` 10.3 for the fast channel: the old 9.8 in exact units, so underpass behaviour stays as validated.
+  Sharing the raised threshold made a 2 s underpass on route 30 latch.
+
+**Replay of all 96 StarPilot-era routes / 824 segments on the device** (`lowbeam_tools/replay_all.py` over `ae/`
+dumps from `extract_ae.py`; old = 9.8, no boost):
+
+| route | sun | old | new |
+|---|---|---|---|
+| 8c overcast dusk | 6.6 -> 2.6 | on 17:49:31 (+3.1) | on 17:29:15, first valid frame (+6.6) |
+| 31 clear, Denver foothills | 5.5 -> 2.5 | never (ended at +2.5) | on at start (+5.5) |
+| 41 clear | 3.2 -> 1.3 | on 18:08:34 (+1.4) | on at start (+3.2) |
+| 40 clear | 8.6 -> 6.8 | off | off (44 s at start before GPS: leaving a garage) |
+| 8a, 8b, 87, 88, 30 (day) | 33 -> 8.8 | off | off |
+| 3b rainy midday | 35 -> 31 | off | 68 s on at <= 8 m/s in heavy gloom (slow 10.5) |
+| night routes | < 0 | latched | unchanged |
+
+- Every drive has at most one switch.
+- The remaining new "on" time is parked sessions in garages or under cover (3a, 3c, 43), which is right.
+- Without the boost (flat 11.2), 8c comes on at 17:37:57 (+5.1) and 31 at +3.6.
+
+**Open.**
+- The October clear-dusk data covers only sun 1.4-8.6 on 4 routes.
+- Snow will raise ground albedo and read brighter, so check the first snowy dusk.
+- The startup flicker (section 9 item 14) shows on every dusk start: G397 turns the lights on for ~5 s before lightd is
+  valid.

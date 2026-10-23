@@ -1,4 +1,5 @@
-from openpilot.starpilot.system.lightd.ambient import AmbientEstimator, CameraSample, REGIME_DAY, REGIME_NIGHT, scene_stops
+from openpilot.starpilot.system.lightd.ambient import AmbientEstimator, CameraSample, REGIME_DAY, REGIME_NIGHT, scene_stops, \
+  twilight_boost
 
 DT = 0.05
 
@@ -73,15 +74,16 @@ def test_short_garage_at_crawl_turns_on_by_time():
 def test_daytime_shade_does_not_turn_on():
   est = AmbientEstimator()
   daylight(est)
-  outs = run(est, lambda t: 11.0, 60.0, elev=40.0, t0=60.0)  # long deep shade, ~2000 lux
+  # long deep shade, just above the threshold (the lowest 20 s average on logged clear/overcast days sits ~0.4 above it)
+  outs = run(est, lambda t: est.p.on_threshold + 0.3, 60.0, elev=40.0, t0=60.0)
   assert not any(o.dark_request for o in outs)
 
 
 def test_storm_turns_on_via_slow_channel():
   est = AmbientEstimator()
   daylight(est)
-  # storm clouds roll in over a few minutes, down to ~700 lux
-  outs = run(est, lambda t: max(15.5 - (t - 60.0) * 0.05, 9.4), 240.0, elev=30.0, t0=60.0)
+  # storm clouds roll in over a few minutes, down to ~1 stop below the threshold
+  outs = run(est, lambda t: max(15.5 - (t - 60.0) * 0.05, est.p.on_threshold - 1.0), 240.0, elev=30.0, t0=60.0)
   t_on = first(outs, lambda o: o.dark_request)
   assert t_on is not None and t_on > 100.0
   assert outs[-1].dark_slow and not outs[-1].dark_tunnel
@@ -96,27 +98,27 @@ def test_night_latch_ignores_bright_lights():
 
 def test_dusk_hysteresis():
   est = AmbientEstimator()
-  on, hyst = est.p.on_threshold, est.p.hysteresis
-  run(est, lambda t: on + 2.0, 100.0, elev=6.0)
-  assert run(est, lambda t: on - 0.3, 100.0, elev=6.0, t0=100.0)[-1].dark_request
+  on, hyst = est.p.on_threshold, est.p.hysteresis  # elev 12: above the twilight boost
+  run(est, lambda t: on + 2.0, 100.0, elev=12.0)
+  assert run(est, lambda t: on - 0.3, 100.0, elev=12.0, t0=100.0)[-1].dark_request
   # back above the threshold but inside the hysteresis band: stays on
-  assert run(est, lambda t: on + hyst / 2, 100.0, elev=6.0, t0=200.0)[-1].dark_request
-  assert not run(est, lambda t: on + hyst + 0.5, 100.0, elev=6.0, t0=300.0)[-1].dark_request
+  assert run(est, lambda t: on + hyst / 2, 100.0, elev=12.0, t0=200.0)[-1].dark_request
+  assert not run(est, lambda t: on + hyst + 0.5, 100.0, elev=12.0, t0=300.0)[-1].dark_request
 
 
 def test_sensitivity_shifts_threshold():
   early = AmbientEstimator()
   early.p.sensitivity = 1.0
-  outs = run(early, lambda t: early.p.on_threshold + 0.5, 120.0, elev=6.0)
+  outs = run(early, lambda t: early.p.on_threshold + 0.5, 120.0, elev=12.0)
   assert outs[-1].dark_request
-  assert not run(AmbientEstimator(), lambda t: 9.8 + 0.5, 120.0, elev=6.0)[-1].dark_request
+  assert not run(AmbientEstimator(), lambda t: early.p.on_threshold + 0.5, 120.0, elev=12.0)[-1].dark_request
 
 
 def test_startup_ae_transient_is_ignored():
   # camerad starts reading ~14 at dusk and takes a few seconds to converge to ~10 (logged)
   est = AmbientEstimator()
-  outs = run(est, lambda t: max(14.0 - t, 9.4), 20.0, elev=5.5)
-  assert abs(outs[-1].slow_b - 9.4) < 0.05
+  outs = run(est, lambda t: max(14.0 - t, 10.4), 20.0, elev=5.5)
+  assert abs(outs[-1].slow_b - 10.4) < 0.05
   assert outs[-1].dark_request
 
 
@@ -126,3 +128,23 @@ def test_stale_camera_invalidates():
   old = CameraSample(4.9, 0.3, 50.0)
   out = est.update(6.0, old, old, 30.0)
   assert not out.valid
+
+
+def test_twilight_boost_ramps_with_sun():
+  p = AmbientEstimator().p
+  assert twilight_boost(p, None) == 0.0
+  assert twilight_boost(p, p.twilight_boost_hi + 5.0) == 0.0
+  assert twilight_boost(p, p.twilight_boost_lo) == p.twilight_boost
+  assert twilight_boost(p, -3.0) == p.twilight_boost
+  mid = twilight_boost(p, (p.twilight_boost_hi + p.twilight_boost_lo) / 2)
+  assert abs(mid - p.twilight_boost / 2) < 1e-9
+
+
+def test_overcast_dusk_turns_on_before_clear_dusk_would():
+  # route 8c (2026-10-22): overcast, sun +6.5 deg, slow channel ~11.2-11.9 -> lights from the start
+  outs = run(AmbientEstimator(), lambda t: 11.6, 60.0, elev=6.5)
+  assert outs[-1].dark_request and outs[-1].dark_slow
+  # earlier the same day: overcast, sun +10.6 deg, ~12.6 -> lights stay off
+  assert not any(o.dark_request for o in run(AmbientEstimator(), lambda t: 12.6, 60.0, elev=10.6))
+  # clear open-terrain evening at sun +7 deg reads ~12.7: still off
+  assert not any(o.dark_request for o in run(AmbientEstimator(), lambda t: 12.7, 60.0, elev=7.0))
