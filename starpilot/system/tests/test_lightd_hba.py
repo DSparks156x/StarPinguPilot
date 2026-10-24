@@ -236,6 +236,19 @@ def test_restores_cut_short_by_weak_lights_back_off():
   assert outs[-1].clear_needed_s == clf.p.clear_s
 
 
+def test_a_passing_car_resets_the_restore_backoff():
+  # route 90: cars cut two restores short, and the backoff then waited 8 s after every car that went past
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  clf = HbaClassifier()
+  run(clf, [dark_frame()] * 50)
+  outs = run(clf, _pair_frames(geom, 12, 1, 235), t0=2.5)
+  assert not outs[-1].high_beam_permitted and outs[-1].clear_needed_s == 2 * clf.p.clear_s
+  passing = [frame_with_light(geom, 150.0 - i * 130.0 / 80, -3.6, 0.7, radius=4) for i in range(80)]
+  run(clf, passing, t0=3.1)
+  assert _restore_after(clf, 7.1) == pytest.approx(clf.p.clear_pass_s, abs=2 * DT)
+  assert clf.policy.clear_needed == clf.p.clear_s
+
+
 def test_only_a_lead_right_after_a_restore_skips_the_backoff():
   geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
   lamp = [frame_with_light(geom, 60, -3.6, 0.7, radius=4)] * 4
@@ -331,6 +344,28 @@ def test_restore_is_fast_after_a_pass_and_slower_when_a_light_vanishes_far():
   run(clf, [dark_frame()] * 120)
   assert not run(clf, [frame_with_light(geom, 150.0, -3.6, 0.7, radius=4)] * 80, t0=6.0)[-1].high_beam_permitted
   assert _restore_after(clf, 10.0) == pytest.approx(clf.p.clear_far_s, abs=2 * DT)
+
+
+def _bend(k, horizon):
+  """A road bending right, y = k x^2, that the model sees out to horizon m."""
+  xs = np.linspace(0, horizon, 17)
+  return {**STRAIGHT, "position": np.column_stack([xs, k * xs ** 2, np.zeros(17)]),
+          "lanes": [np.column_stack([xs, y + k * xs ** 2, np.full(17, HEIGHT)]) for y in (-5.4, -1.8, 1.8, 5.4)]}
+
+
+def test_a_light_beside_a_straight_road_is_roadside_but_not_one_round_a_bend_towards_our_side():
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  clf = HbaClassifier()
+  run(clf, [frame_with_light(geom, 40.0, 6.0, 0.7, radius=1)] * 6)
+  assert {tr.why for tr in clf.tracks if tr.missed == 0} == {"roadside"}
+  # route 90 seg 21: a car in the oncoming lane 110 m round a right bend the model sees only out to 60 m, low lamps. Past
+  # 60 m the path goes straight on and the one-row range says 70 m, so the car is 6 degrees right of the road there; its
+  # ray is over our lanes at lamp height 8x farther out
+  k, x = 3e-3, 110.0
+  clf = HbaClassifier()
+  run(clf, [frame_with_light(geom, x, k * x * x - 3.6, 0.4, radius=1)] * 6, model=_bend(k, 60.0))
+  live = [tr for tr in clf.tracks if tr.missed == 0]
+  assert live and all(tr.hist[-1].bend > clf.p.roadside_bend_k and tr.why != "roadside" for tr in live)
 
 
 def test_a_short_dip_stays_low_for_the_minimum_time():

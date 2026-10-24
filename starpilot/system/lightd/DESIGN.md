@@ -1088,3 +1088,57 @@ dumps from `extract_ae.py`; old = 9.8, no boost):
 - Snow will raise ground albedo and read brighter, so check the first snowy dusk.
 - The startup flicker (section 9 item 14) shows on every dusk start: G397 turns the lights on for ~5 s before lightd is
   valid.
+
+## 15. Drive 4 (route `00000090`, 2026-10-23): back-off, bends, the wide hand-off (2026-10-24)
+
+The first drive on the section 13 code (device build 160836e4), with HBA on throughout. The driver said it was better
+but still bad: a car just round a corner the wide camera should have caught (high beam, then an immediate dip), one
+flash at cars, and several stretches that stayed dipped. 15.6 min dark at >= 60 km/h.
+
+**Stretches that stayed dipped: the restore back-off.** Each "not sure" dip within `short_permit_s` of a restore
+doubles `clear_s`, up to 8 s, and only 10 s of continuous high beam reset it. In seg 18 two restores were cut short by
+real cars: the 0.4 s one at 18:14.6, and the corner car at 18:22. After that, every car that went past was followed by
+8 s of low beam (18:51.0 clear, 18:59.1 restored). The back-off exists for signs our own beam lights. A pass proves the
+last dip was a vehicle that has gone. `pass_resets_backoff`: a pure pass cause restores after `clear_pass_s` and resets
+the back-off. Open loop, with the drive's own beam state, this changes nothing about glare and cuts nuisance by 4 / 5 /
+8 / 10 s (6f / 5a / 46 / 90). The replay feeds back the logged beam, so it rarely builds a back-off; on the car it
+compounds, and the effect is larger. The 11.6 min dipped from seg 29 on was a real lead 40-70 m ahead (model lead
+prob > 0.5 in 90-100 % of frames).
+
+**The flash: "roadside" round a bend toward our side.** At 21:34.9 an oncoming car came round a right bend: lamps 5 ->
+179 px in 1.2 s, a pair, at full beam for 1.3 s. Past the model's horizon the centreline runs straight on, and the
+one-row range (30-60 m, really much farther; the road climbs there) put the lamps 7-10 m right of it. That is
+"roadside" (static), and the glare override needs the oncoming side. A roadside verdict claims the light can't be on
+the road. On a straight road a light beside it only moves farther from the road along its ray; on a bend toward it the
+far road swings into the ray. `Obs.bend`, for would-be roadside lights only, = `lamp_reach` over our two lanes / the
+range. Past `roadside_bend_k` = 2.2 the light is not roadside. The cut-off is not tuned: a lamp at `lamp_low` instead of
+`lamp_height` alone puts the true range up to (1.22 - 0.2) / (1.22 - 0.7) = 2x farther. Measured: the 21:34 car
+2.3-5.7 (median 3.0); the shoulder reflectors that a 1.3 cut-off let through on 6f / 46 1.1-2.1. At 1.3 it cost 6-13 s
+of nuisance per drive; at 2.2 it is neutral (+-1 s) on 6f / 5a / 46 and 90 dips 0.4 s sooner.
+
+**The corner car: tried and reverted.** At 24:53 a car round a left bend was in the narrow frame (u ~ 140) but just
+outside the narrow corridor, which follows the straight-ahead road. The wide guard leaves the whole narrow view to the
+narrow pipeline, so neither camera handled it until it left the narrow frame at 53.8 s. The beam came on at 53.7, and
+the wide hit dipped it at 54.0. Leaving the wide guard only the narrow *corridor* (the narrow corridor mask warped into
+the wide image, a homography because the cameras share a centre) caught this car. But the rest of the narrow view held
+over 19,000 lights on route 90 (wide columns 500-800), nearly all far house lights and high lights that the narrow
+corridor's tighter geometry rejects on purpose. Nuisance +60-80 s and toggles +0.4-0.6 / min per drive: reverted. The
+wide camera also saw the 24:53 car at 2-4 px (at stride 2) with a ring of 65-104 for 1.8 s before `wide_min_area`, but
+small blooming wide blobs while the beam was on have no labels (6f: 16 such looks), so the gate stays.
+
+**The other events.**
+- 23:33.8: an oncoming car came over a crest already about 13 m away; dipped within 1-2 frames. Nothing to gain.
+- 18:22: a lamp pair at 100 m, far left, appeared 0.1 s after our switch-on, so it was "beam" (a reflector until it
+  pairs on 3 of 5 frames). Replay dipped it at 22.7 (0.5 s), the car at 23.5. Unchanged.
+
+**Results** (policy_sim, open loop, old = section 13 code without `pass_resets_backoff`):
+
+| drive | glare s | glare < 200 m | nuisance s | toggles / min |
+|---|---|---|---|---|
+| 6f | 1.6 -> 1.6 | 0.9 -> 0.9 | 226 -> 221 | 2.07 -> 2.07 |
+| 5a | 1.4 -> 1.4 | 1.0 -> 1.0 | 215 -> 211 | 1.83 -> 1.83 |
+| 46 | 1.5 -> 1.5 | 1.2 -> 1.2 | 144 -> 136 | 1.24 -> 1.30 |
+| 90 | 3.7 -> 3.3 | 2.8 -> 2.4 | 215 -> 205 | 2.12 -> 2.12 |
+
+Tools: `hba_tools/glare_eps.py` (beam-on episodes with a vehicle chain live, on car or replay), `evsheet.py` (narrow and
+wide frames around events), `roadside_stats.py`. Tracks csv has `bend`.

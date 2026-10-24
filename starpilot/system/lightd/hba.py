@@ -154,7 +154,12 @@ class HbaParams:
   glow_max_core: int = 600          # ...and a core bigger than this is a lamp right in front of us, not a far sign
   near_band_m: float = 30.0         # a light whose ray is only at lamp height closer than this...
   near_band_area: int = 80          # ...and is smaller than this is not a lamp: a car that close would be huge
-  roadside_angle_deg: float = 3.3   # off-path angle on the non-oncoming side beyond which a light is roadside
+  roadside_angle_deg: float = 3.3   # off-path angle on the non-oncoming side beyond which a light is roadside...
+  roadside_bend_k: float = 2.2      # ...unless its ray is over our lanes at lamp height past this x its range: on a bend
+                                    # toward our side the range (one row, one lamp height) puts a far car beside the road
+                                    # (route 90 seg 21: a car round a right bend was "roadside" for 1.2 s at full beam,
+                                    # ratio 2.3-5.7). A lamp at lamp_low instead of lamp_height alone is up to
+                                    # (1.22 - 0.2) / (1.22 - 0.7) = 2x farther; shoulder reflectors on gentle bends: 1.1-2.1
                                     # (in-lane vehicles only get there inside ~40 m, where the model lead has them).
                                     # Angle = lateral / distance, so it survives the unknown lamp height.
   motion_max_dist: float = 70.0     # beyond this a lamp is a few px below the horizon and 1 px of row is tens of
@@ -182,6 +187,8 @@ class HbaParams:
   clear_max_s: float = 8.0          # restore backoff: each restore cut short within short_permit_s doubles clear_s
   short_permit_s: float = 3.0
   backoff_reset_s: float = 10.0     # this long permitted resets the backoff
+  pass_resets_backoff: bool = True  # ...and so does a vehicle going past: the cut-short restores were traffic, not signs
+                                    # our beam lit (route 90 sat at 8 s through a run of cars)
   enable_v: float = 60 / 3.6
   disable_v: float = 50 / 3.6
   # evidence (after Gentex SmartBeam, see DESIGN.md section 12): instead of "any threat on two frames dips", each track
@@ -242,6 +249,8 @@ class HbaParams:
   wide_stride: int = 2              # the wide frame is looked at every other row and column; px below are at that scale
   wide_margin_px: int = 4
   wide_narrow_inset_px: int = 40    # narrow px: a light this far inside the narrow view is left to the narrow pipeline
+                                    # (all of it: leaving only its corridor, DESIGN.md section 15, let in the far house
+                                    # lights the narrow corridor rejects and added 60-80 s of dips per drive)
   wide_y: int = 225
   wide_min_area: int = 6
   wide_max_chroma: int = 40         # median |U - 128| + |V - 128|: a lit yellow sign is far from neutral
@@ -289,6 +298,9 @@ class Obs(NamedTuple):
                 # is small): building, sign, streetlight
   partner: bool = False  # paired by a second blob on its row, not by being wide
   compact: bool = False  # a saturated core whose glow ends close around it: a lit sign (glow_ratio)
+  bend: float = 0.0      # off to our side at its range: how much farther out its ray is still at lamp height over our
+                         # two lanes (x its range). Past roadside_bend_k the road bends that way and it can be a car on it.
+                         # Only looked at for would-be roadside lights, 0 otherwise.
 
 
 @dataclass
@@ -989,12 +1001,15 @@ class HbaPolicy:
 
   def _clear_needed(self, v_ego):
     p = self.p
-    if self.clear_needed > p.clear_s or not p.restore_by_cause:
-      return self.clear_needed  # backing off after early re-dips: that wins
+    if not p.restore_by_cause:
+      return self.clear_needed
     # only what ended just before the corridor went clear says what cleared it
     c = {k for k, t in self.causes.items() if t >= self.clear_since - p.cause_window_s}
-    if "pass" in c and c <= {"pass", "wide"}:
+    if "pass" in c and c <= {"pass", "wide"} and (p.pass_resets_backoff or self.clear_needed <= p.clear_s):
+      self.clear_needed = p.clear_s
       return p.clear_pass_s
+    if self.clear_needed > p.clear_s:
+      return self.clear_needed  # backing off after early re-dips: that wins
     if c == {"far"} or c == {"far", "pass"}:
       return p.clear_far_s
     return p.clear_s
@@ -1210,8 +1225,15 @@ class HbaClassifier:
     if rh is not None:
       in_band = (rh[1][1:] >= p.lamp_low - p.band_slack) & (rh[1][1:] <= p.lamp_high + p.band_slack)
       high = not in_band.any() or (b.area < p.near_band_area and center[in_band, 0].max() < p.near_band_m)
+    bend = 0.0
+    if math.isfinite(angle) and p.oncoming_side * angle < -p.roadside_angle_deg:
+      # on a straight road a light beside it only gets farther from it along its ray: the lanes are crossed, if at all,
+      # closer than the light. Crossed beyond it, the road curves into the ray.
+      lanes = (p.ego_half_width + p.oncoming_width, p.ego_half_width)
+      reach = lamp_reach(geom, b.u, b.v, center, lanes if p.oncoming_side < 0 else lanes[::-1], p)
+      bend = reach / dist if math.isfinite(reach) else 0.0
     return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner,
-               b.glow < p.glow_ratio)
+               b.glow < p.glow_ratio, bend)
 
   def _beam_check(self, tr: Track):
     """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
@@ -1285,7 +1307,8 @@ class HbaClassifier:
     near = np.isfinite(last.dist) and last.dist < p.motion_max_dist
     exempt = big_white or (any_red and (self._adjacent or not near))
     finite = angles[np.isfinite(angles)]  # np.nanmedian goes through masked arrays for small inputs: slow
-    if not exempt and len(finite) and p.oncoming_side * median(finite) < -p.roadside_angle_deg:
+    bend = sum(h.bend > p.roadside_bend_k for h in recent) * 2 > len(recent)
+    if not exempt and not bend and len(finite) and p.oncoming_side * median(finite) < -p.roadside_angle_deg:
       tr.obj_speed = float("nan")
       tr.kind, tr.why = KIND_STATIC, "roadside"  # roadside on our side: reflectors, parked cars, driveway markers
       return
