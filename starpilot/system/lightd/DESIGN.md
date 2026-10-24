@@ -1116,7 +1116,7 @@ range. Past `roadside_bend_k` = 2.2 the light is not roadside. The cut-off is no
 2.3-5.7 (median 3.0); the shoulder reflectors that a 1.3 cut-off let through on 6f / 46 1.1-2.1. At 1.3 it cost 6-13 s
 of nuisance per drive; at 2.2 it is neutral (+-1 s) on 6f / 5a / 46 and 90 dips 0.4 s sooner.
 
-**The corner car: tried and reverted.** At 24:53 a car round a left bend was in the narrow frame (u ~ 140) but just
+**The corner car: tried and reverted.** (Corrected in section 16: this was a yard light, not a car.) At 24:53 a car round a left bend was in the narrow frame (u ~ 140) but just
 outside the narrow corridor, which follows the straight-ahead road. The wide guard leaves the whole narrow view to the
 narrow pipeline, so neither camera handled it until it left the narrow frame at 53.8 s. The beam came on at 53.7, and
 the wide hit dipped it at 54.0. Leaving the wide guard only the narrow *corridor* (the narrow corridor mask warped into
@@ -1142,3 +1142,42 @@ small blooming wide blobs while the beam was on have no labels (6f: 16 such look
 
 Tools: `hba_tools/glare_eps.py` (beam-on episodes with a vehicle chain live, on car or replay), `evsheet.py` (narrow and
 wide frames around events), `roadside_stats.py`. Tracks csv has `bend`.
+
+## 16. Route 90 follow-ups: the 24:54 dip, the wide guard, birth at switch-on (2026-10-24)
+
+No HBA code changed. Each candidate fix was measured and rejected.
+
+**The "corner car" at 24:54 was a yard light.** `hba_tools/raydbg.py` traces a narrow pixel's ray against the model's lanes. At
+24:50-53 the model saw a straight road (lane probs 0.94-1.0, centre within 0.2 m out to 190 m), so the straight-on
+extrapolation past the horizon played no part. Narrow track 22 was one warm light on the left for 15 s (u 804 -> 221). Its ray
+over our lanes is 1.4-1.9 m above the road, and it rose in the image as we closed (v 353 -> 339), so it is mounted above
+camera height. In the crops it lights the wall beside it. The narrow pipeline called it candidate/colour, then static/high,
+which is correct. The beam came on at 53.7 s (logged on 54.0). The wide guard saw the same light at 10-15 m reach, 4 looks,
+and dipped. The only car in the segment appears at 58.5 s on the straight, with the beam already low. So the driver's
+"high beam then an immediate dip" was a 0.3 s blip on a fixed light, not a missed car.
+
+**Narrow -> wide verdict hand-off: rejected.** The idea: the two cameras share a centre, so a light the narrow pipeline called
+static can be recognised in the wide frame by its direction (`hba_tools/handoff.py` extrapolates each ended narrow track's
+calib-frame azimuth and elevation to the wide looks within 2 s). On 4 drives only 3-12 wide looks per drive are wholly lights
+narrow called static. Policy_sim nuisance changes by 0.2 s on 90 and 0 elsewhere. It also loses the 24:54 light after one look,
+because a fixed light's bearing rate grows as 1/x. Doing this properly would mean triangulating each static light from bearing
+and odometry, for about one blip per drive.
+
+**Wide guard lamp-height slack: rejected.** The wide guard's three dips on 6f / 46 / 90 (one each, policy_sim `--dips`) were all
+high fixed lights on the left. `hba_tools/wide_reach.py` recomputes `lamp_reach` for every wide lamp hit at other
+`band_slack` values. At 0.2 m (vs 0.5) the 6f and 46 lights stop being lamps, 90's keeps two of four looks, and among hits
+matching a narrow vehicle track 2 single looks are lost, each inside a run that still catches the car. Policy_sim
+(`hba_tools/wide_variant.py`): 6f glare 1.6 -> 2.3 s (< 200 m: 0.9 -> 1.4), 46 nuisance -0.7 s and one toggle fewer, 90
+unchanged. The 6f yard-light dip came 1 s before a real oncoming car, so removing it is glare. Kept at 0.5.
+
+**Birth at switch-on (18:22): unchanged.** The idea was that an unpaired light born less than `beam_after_s[0]` after the
+switch can't have been lit by us. But tracks born within 0.05 s of the logged GK1 switch-on are mostly ones later called static
+(7/27/12/2 on 90/5a/46/6f, against 1/6/4/2 that pair or move). GK1 lags the lamp, so the logged switch time can't be trusted to
+0.15 s. The pairing escape (3 of 5 frames) stays the evidence. It dipped for the 18:22 car in 0.5 s.
+
+**Camera.** The comma 4's OS04C10s run linear RAW12, one exposure per frame. A short exposure alongside openpilot's would need
+OmniVision stagger HDR. The SD845 ISP / kernel can route the second virtual channel to an RDI output alongside the pixel path,
+but every stagger table available (comma's 2024 `cc3550df2a`, draft PR commaai/openpilot#36806) is RAW10 with different timing,
+which changes openpilot's night frames. RAW12 stagger at 20 fps full-res exceeds the 776 Mbps lanes. Details, kernel
+citations and datasheet questions: `CAMERA_HDR.md`. `LOG_RAW_FRAMES` derefs an unset `cur_camera_buf` on IFE-processed
+cameras and would crash camerad. Don't use it.
