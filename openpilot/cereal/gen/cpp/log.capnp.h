@@ -3338,6 +3338,7 @@ struct Event {
     DRIVER_MONITORING_STATE,
     CHESTNUT_STATE,
     CHESTNUT_GPU_STATE,
+    STARPILOT_LIGHT_STATE,
   };
 
   struct _capnpPrivate {
@@ -23389,6 +23390,10 @@ public:
   inline bool hasChestnutGpuState() const;
   inline  ::cereal::ChestnutState::Reader getChestnutGpuState() const;
 
+  inline bool isStarpilotLightState() const;
+  inline bool hasStarpilotLightState() const;
+  inline  ::cereal::StarPilotCarState::LightState::Reader getStarpilotLightState() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -24639,6 +24644,14 @@ public:
   inline  ::cereal::ChestnutState::Builder initChestnutGpuState();
   inline void adoptChestnutGpuState(::capnp::Orphan< ::cereal::ChestnutState>&& value);
   inline ::capnp::Orphan< ::cereal::ChestnutState> disownChestnutGpuState();
+
+  inline bool isStarpilotLightState();
+  inline bool hasStarpilotLightState();
+  inline  ::cereal::StarPilotCarState::LightState::Builder getStarpilotLightState();
+  inline void setStarpilotLightState( ::cereal::StarPilotCarState::LightState::Reader value);
+  inline  ::cereal::StarPilotCarState::LightState::Builder initStarpilotLightState();
+  inline void adoptStarpilotLightState(::capnp::Orphan< ::cereal::StarPilotCarState::LightState>&& value);
+  inline ::capnp::Orphan< ::cereal::StarPilotCarState::LightState> disownStarpilotLightState();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -59992,6 +60005,60 @@ inline ::capnp::Orphan< ::cereal::ChestnutState> Event::Builder::disownChestnutG
   KJ_IREQUIRE((which() == Event::CHESTNUT_GPU_STATE),
               "Must check which() before get()ing a union member.");
   return ::capnp::_::PointerHelpers< ::cereal::ChestnutState>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool Event::Reader::isStarpilotLightState() const {
+  return which() == Event::STARPILOT_LIGHT_STATE;
+}
+inline bool Event::Builder::isStarpilotLightState() {
+  return which() == Event::STARPILOT_LIGHT_STATE;
+}
+inline bool Event::Reader::hasStarpilotLightState() const {
+  if (which() != Event::STARPILOT_LIGHT_STATE) return false;
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool Event::Builder::hasStarpilotLightState() {
+  if (which() != Event::STARPILOT_LIGHT_STATE) return false;
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::StarPilotCarState::LightState::Reader Event::Reader::getStarpilotLightState() const {
+  KJ_IREQUIRE((which() == Event::STARPILOT_LIGHT_STATE),
+              "Must check which() before get()ing a union member.");
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::cereal::StarPilotCarState::LightState::Builder Event::Builder::getStarpilotLightState() {
+  KJ_IREQUIRE((which() == Event::STARPILOT_LIGHT_STATE),
+              "Must check which() before get()ing a union member.");
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void Event::Builder::setStarpilotLightState( ::cereal::StarPilotCarState::LightState::Reader value) {
+  _builder.setDataField<Event::Which>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, Event::STARPILOT_LIGHT_STATE);
+  ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::StarPilotCarState::LightState::Builder Event::Builder::initStarpilotLightState() {
+  _builder.setDataField<Event::Which>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, Event::STARPILOT_LIGHT_STATE);
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void Event::Builder::adoptStarpilotLightState(
+    ::capnp::Orphan< ::cereal::StarPilotCarState::LightState>&& value) {
+  _builder.setDataField<Event::Which>(
+      ::capnp::bounded<4>() * ::capnp::ELEMENTS, Event::STARPILOT_LIGHT_STATE);
+  ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::StarPilotCarState::LightState> Event::Builder::disownStarpilotLightState() {
+  KJ_IREQUIRE((which() == Event::STARPILOT_LIGHT_STATE),
+              "Must check which() before get()ing a union member.");
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarState::LightState>::disown(_builder.getPointerField(
       ::capnp::bounded<0>() * ::capnp::POINTERS));
 }
 
