@@ -149,6 +149,29 @@ def visual_border_state(state: OnroadState, signals: Signals) -> OnroadState:
     border.left_blindspot or signals.vasm_left, border.right_blindspot or signals.vasm_right))
 
 
+def _render_tamagotchi(camera_owner: Any, rect: rl.Rectangle, state: OnroadState) -> None:
+  """StarPinguPilot: Pingu over the road camera, below alerts, when ShowTamagotchi is on."""
+  if (state.appearance.show_tamagotchi and state.camera_available and not state.reverse_driver_camera and
+      state.appearance.camera_view not in (CameraViewChoice.DRIVER, CameraViewChoice.NONE)):
+    camera_owner.render_tamagotchi_layer(rect)
+
+
+def _pingulink_entry():
+  """StarPinguPilot: compact Device panel entry for the Pingulink page."""
+  from openpilot.selfdrive.ui.mici.layouts.settings.pingulink import PingulinkLayoutMici
+  from openpilot.selfdrive.ui.mici.widgets.button import BigButton
+  panel: list[PingulinkLayoutMici] = []
+
+  def open_panel():
+    if not panel:
+      panel.append(PingulinkLayoutMici())
+    gui_app.push_widget(panel[0])
+
+  button = BigButton("pingulink", "status and connection")
+  button.set_click_callback(open_panel)
+  return button
+
+
 class StarShellSession:
   """Own native shell resources and one request/router boundary per app."""
 
@@ -189,9 +212,11 @@ class StarShellSession:
       if profile == Profile.COMPACT:
         self.view.onroad.stock_confidence_layer = lambda rect, state: render_stock_confidence(camera_owner, rect, state)
         self.view.onroad.stock_confidence_reset = camera_owner.reset_stock_confidence_layer
-        self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect, show_long_indicator=None)
+        self.view.onroad.extra_overlays = lambda rect, state: (camera_owner.render_model_source_layer(rect, show_long_indicator=None),
+                                                               _render_tamagotchi(camera_owner, rect, state))
       else:
-        self.view.onroad.extra_overlays = lambda rect, state: camera_owner.render_model_source_layer(rect)
+        self.view.onroad.extra_overlays = lambda rect, state: (camera_owner.render_model_source_layer(rect),
+                                                               _render_tamagotchi(camera_owner, rect, state))
     except Exception:
       self.fonts.close()
       raise
@@ -2157,7 +2182,7 @@ class StarMiciMainLayout(MiciMainLayout):
       if destination == Destination.DEVICE:
         from openpilot.starpilot.ui.display_compact import DisplayCompact
         from openpilot.starpilot.ui.replay_settings import replay_entry
-        panel._scroller.add_widgets([DisplayCompact(self.star).entry_button(), replay_entry(self.star)])
+        panel._scroller.add_widgets([DisplayCompact(self.star).entry_button(), replay_entry(self.star), _pingulink_entry()])
       self._compact_panels[destination] = panel
     gui_app.push_widget(panel)
 

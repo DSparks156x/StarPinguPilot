@@ -19,6 +19,7 @@ from openpilot.system.ui.widgets.label import gui_label
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
 from openpilot.system.ui.widgets import Widget
+from openpilot.system.ui.widgets.tamagotchi import TamagotchiWidget
 from openpilot.common.filter_simple import BounceFilter, FirstOrderFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
@@ -250,6 +251,7 @@ class AugmentedRoadView(CameraView):
                                        alignment_vertical=TextAlignmentVertical.MIDDLE)
 
     self._fade_texture = gui_app.texture("icons_mici/onroad/onroad_fade.png")
+    self._tamagotchi: TamagotchiWidget | None = None  # StarPinguPilot, loaded on first use
 
   def render_camera_model_layer(self, rect: rl.Rectangle, *, camera_view: int = CAMERA_VIEW_AUTO,
                                 reverse_driver: bool = False, lead_indicator: bool = False,
@@ -290,6 +292,14 @@ class AugmentedRoadView(CameraView):
     if show_long_indicator is not None:
       self._long_indicator.set_should_draw(show_long_indicator)
       self._long_indicator.render(rect)
+
+  def render_tamagotchi_layer(self, rect: rl.Rectangle, margin: float = 4.) -> None:
+    """StarPinguPilot: Pingu in the bottom-right corner of the road camera."""
+    if self.stream_type == DRIVER_CAM:
+      return
+    if self._tamagotchi is None:
+      self._tamagotchi = TamagotchiWidget(scale=0.5)
+    self._tamagotchi.render_corner(rect, margin)
 
   def render_stock_confidence_layer(self, rect: rl.Rectangle, *, lateral_active: bool = False) -> None:
     self._confidence_ball.render_with_lateral(rect, lateral_active)
@@ -373,6 +383,8 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)
     self._hud_renderer.set_wheel_critical_icon(alert_to_render is not None and not not_animating_out and
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
+    if ui_state.show_tamagotchi:  # StarPinguPilot
+      self.render_tamagotchi_layer(self._content_rect)
     self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
 

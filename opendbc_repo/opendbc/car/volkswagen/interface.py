@@ -37,7 +37,11 @@ class CarInterface(CarInterfaceBase):
       else:
         ret.networkLocation = NetworkLocation.fwdCamera
 
-      ret.dashcamOnly = is_release  # Release support needs HCA timeout fix, safety validation
+      # StarPinguPilot: allowed outside of release, like sunnypilot. Docs keep the upstream support status.
+      ret.dashcamOnly = is_release or docs
+
+      if ret.flags & VolkswagenFlags.NO_EXT_CAN:
+        safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_NO_EXT_CAN.value
 
     elif ret.flags & VolkswagenFlags.MLB:
       # Set global MLB parameters
@@ -127,8 +131,9 @@ class CarInterface(CarInterfaceBase):
       ret.alphaLongitudinalAvailable = ret.networkLocation == NetworkLocation.gateway or docs
       ret.longitudinalActuatorDelay = 0.3
     else:
-      ret.alphaLongitudinalAvailable = ret.networkLocation == NetworkLocation.gateway or docs
-      if alpha_long:
+      # StarPinguPilot: no longitudinal on plain cruise control cars (no ACC radar)
+      ret.alphaLongitudinalAvailable = (ret.networkLocation == NetworkLocation.gateway or docs) and not ret.flags & VolkswagenFlags.PQ_CC_ONLY
+      if alpha_long and not ret.flags & VolkswagenFlags.PQ_CC_ONLY:
         ret.openpilotLongitudinalControl = True
         safety_configs[0].safetyParam |= VolkswagenSafetyFlags.LONG_CONTROL.value
         if ret.transmissionType == TransmissionType.manual:
@@ -138,6 +143,8 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.PORSCHE_MACAN_MK1:
       ret.steerActuatorDelay = 0.07
+    elif candidate == CAR.AUDI_TT_MK2:
+      ret.steerActuatorDelay = 0.08
     elif candidate == CAR.VOLKSWAGEN_TAOS_MK1:
       # Taos braking response is about 0.1 s later than the MQB default.
       ret.longitudinalActuatorDelay = 0.25

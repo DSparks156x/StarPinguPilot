@@ -13,6 +13,7 @@
 #define MSG_MOTOR_5             0x480U   // RX from ECU, for ACC main switch state
 #define MSG_ACC_GRA_ANZEIGE     0x56AU   // TX by OP, ACC HUD
 #define MSG_LDW_1               0x5BEU   // TX by OP, Lane line recognition and text alerts
+#define MSG_MFLA_1              0x65AU   // TX by OP (StarPinguPilot), HBA camera frame carrying camera lights to the J519
 
 static uint32_t volkswagen_pq_get_checksum(const CANPacket_t *msg) {
   return (uint32_t)msg->data[(msg->addr == MSG_MOTOR_5) ? 7 : 0];
@@ -46,6 +47,39 @@ static uint32_t volkswagen_pq_compute_checksum(const CANPacket_t *msg) {
   return checksum;
 }
 
+// StarPinguPilot: cars without an extended CAN (e.g. Audi TT Mk2) have everything on bus 1
+#define FLAG_VOLKSWAGEN_PQ_NO_EXT_CAN 4U
+
+// StarPinguPilot: allow mFLA_1 (camera low beam / high beam assist for a patched J519) on bus 1.
+// Must match VolkswagenSafetyFlags.PQ_LIGHT_TX in opendbc/car/volkswagen/values.py
+#define FLAG_VOLKSWAGEN_PQ_LIGHT_TX 512U
+
+// StarPinguPilot: user-selectable HCA rate limits, encoded as (table index + 1) in 3-bit fields of the safety param.
+// A field value of 0 keeps the stock limits. Must match HCA_DELTA_RATES in opendbc/car/volkswagen/hca_tuning.py
+#define VOLKSWAGEN_PQ_RATE_UP_SHIFT 3U
+#define VOLKSWAGEN_PQ_RATE_DOWN_SHIFT 6U
+#define VOLKSWAGEN_PQ_STOCK_RATE_UP 6
+#define VOLKSWAGEN_PQ_STOCK_RATE_DOWN 10
+
+static uint8_t volkswagen_pq_bus = 0U;
+static int volkswagen_pq_max_rate_up = VOLKSWAGEN_PQ_STOCK_RATE_UP;
+static int volkswagen_pq_max_rate_down = VOLKSWAGEN_PQ_STOCK_RATE_DOWN;
+
+static int volkswagen_pq_hca_rate(uint16_t param, uint16_t shift, int stock_rate) {
+  static const int VOLKSWAGEN_PQ_HCA_DELTA_RATES[] = {10, 30, 50, 150, 300};
+  int rate = stock_rate;
+#ifdef ALLOW_DEBUG
+  int idx = (int)((param >> shift) & 0x7U);
+  if ((idx >= 1) && (idx <= 5)) {
+    rate = VOLKSWAGEN_PQ_HCA_DELTA_RATES[idx - 1];
+  }
+#else
+  SAFETY_UNUSED(param);
+  SAFETY_UNUSED(shift);
+#endif
+  return rate;
+}
+
 static safety_config volkswagen_pq_init(uint16_t param) {
   // Transmit of GRA_Neu is allowed on bus 0 and 2 to keep compatibility with gateway and camera integration
   static const CanMsg VOLKSWAGEN_PQ_STOCK_TX_MSGS[] = {
@@ -62,6 +96,35 @@ static safety_config volkswagen_pq_init(uint16_t param) {
     {MSG_ACC_GRA_ANZEIGE, 0, 8, .check_relay = true},
   };
 
+  static const CanMsg VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1[] = {
+    {MSG_HCA_1, 1, 5, .check_relay = true},
+    {MSG_LDW_1, 1, 8, .check_relay = true},
+    {MSG_GRA_NEU, 1, 4, .check_relay = false},
+  };
+
+  static const CanMsg VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1[] = {
+    {MSG_HCA_1, 1, 5, .check_relay = true},
+    {MSG_LDW_1, 1, 8, .check_relay = true},
+    {MSG_ACC_SYSTEM, 1, 8, .check_relay = true},
+    {MSG_ACC_GRA_ANZEIGE, 1, 8, .check_relay = true},
+  };
+
+  // StarPinguPilot: + mFLA_1. No relay check: a factory FLA camera would also send 0x65A, and that must not stop steering.
+  static const CanMsg VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1_LIGHT[] = {
+    {MSG_HCA_1, 1, 5, .check_relay = true},
+    {MSG_LDW_1, 1, 8, .check_relay = true},
+    {MSG_GRA_NEU, 1, 4, .check_relay = false},
+    {MSG_MFLA_1, 1, 8, .check_relay = false},
+  };
+
+  static const CanMsg VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1_LIGHT[] = {
+    {MSG_HCA_1, 1, 5, .check_relay = true},
+    {MSG_LDW_1, 1, 8, .check_relay = true},
+    {MSG_ACC_SYSTEM, 1, 8, .check_relay = true},
+    {MSG_ACC_GRA_ANZEIGE, 1, 8, .check_relay = true},
+    {MSG_MFLA_1, 1, 8, .check_relay = false},
+  };
+
   static RxCheck volkswagen_pq_rx_checks[] = {
     {.msg = {{MSG_LENKHILFE_3, 0, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_BREMSE_1, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
@@ -71,21 +134,43 @@ static safety_config volkswagen_pq_init(uint16_t param) {
     {.msg = {{MSG_GRA_NEU, 0, 4, 30U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
   };
 
+  static RxCheck volkswagen_pq_rx_checks_bus1[] = {
+    {.msg = {{MSG_LENKHILFE_3, 1, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_BREMSE_1, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_2, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_3, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_MOTOR_5, 1, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+    {.msg = {{MSG_GRA_NEU, 1, 4, 30U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+  };
+
   volkswagen_common_init();
 
 #ifdef ALLOW_DEBUG
   volkswagen_longitudinal = GET_FLAG(param, FLAG_VOLKSWAGEN_LONG_CONTROL);
-#else
-  SAFETY_UNUSED(param);
 #endif
-  return volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
-                                   BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
+
+  volkswagen_pq_bus = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_NO_EXT_CAN) ? 1U : 0U;
+  volkswagen_pq_max_rate_up = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_UP_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_UP);
+  volkswagen_pq_max_rate_down = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_DOWN_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_DOWN);
+
+  safety_config ret;
+  if ((volkswagen_pq_bus == 1U) && GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_LIGHT_TX)) {
+    ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1_LIGHT) : \
+                                    BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1_LIGHT);
+  } else if (volkswagen_pq_bus == 1U) {
+    ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1) : \
+                                    BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1);
+  } else {
+    ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
+                                    BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
+  }
+  return ret;
 }
 
 static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
   // Update in-motion state from speed value.
   // Signal: Bremse_1.BR1_Rad_kmh
-  if (msg_matches(msg, MSG_BREMSE_1, 0U)) {
+  if (msg_matches(msg, MSG_BREMSE_1, volkswagen_pq_bus)) {
     int speed = ((msg->data[2] & 0xFEU) >> 1) | (msg->data[3] << 7);
     vehicle_moving = speed > 0;
   }
@@ -93,7 +178,7 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
   // Update driver input torque samples
   // Signal: Lenkhilfe_3.LH3_LM (absolute torque)
   // Signal: Lenkhilfe_3.LH3_LMSign (direction)
-  if (msg_matches(msg, MSG_LENKHILFE_3, 0U)) {
+  if (msg_matches(msg, MSG_LENKHILFE_3, volkswagen_pq_bus)) {
     int torque_driver_new = msg->data[2] | ((msg->data[3] & 0x3U) << 8);
     int sign = (msg->data[3] & 0x4U) >> 2;
     if (sign == 1) {
@@ -103,7 +188,7 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
   }
 
   if (volkswagen_longitudinal) {
-    if (msg_matches(msg, MSG_MOTOR_5, 0U)) {
+    if (msg_matches(msg, MSG_MOTOR_5, volkswagen_pq_bus)) {
       // ACC main switch on is a prerequisite to enter controls, exit controls immediately on main switch off
       // Signal: Motor_5.MO5_GRA_Hauptsch
       acc_main_on = GET_BIT(msg, 50U);
@@ -112,7 +197,7 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
       }
     }
 
-    if (msg_matches(msg, MSG_GRA_NEU, 0U)) {
+    if (msg_matches(msg, MSG_GRA_NEU, volkswagen_pq_bus)) {
       // If ACC main switch is on, enter controls on falling edge of Set or Resume
       // Signal: GRA_Neu.GRA_Neu_Setzen
       // Signal: GRA_Neu.GRA_Neu_Recall
@@ -130,7 +215,7 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
       }
     }
   } else {
-    if (msg_matches(msg, MSG_MOTOR_2, 0U)) {
+    if (msg_matches(msg, MSG_MOTOR_2, volkswagen_pq_bus)) {
       // Enter controls on rising edge of stock ACC, exit controls if stock ACC disengages
       // Signal: Motor_2.MO2_Sta_GRA
       int acc_status = (msg->data[2] & 0xC0U) >> 6;
@@ -140,12 +225,12 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
   }
 
   // Signal: Motor_3.MO3_Pedalwert
-  if (msg_matches(msg, MSG_MOTOR_3, 0U)) {
+  if (msg_matches(msg, MSG_MOTOR_3, volkswagen_pq_bus)) {
     gas_pressed = (msg->data[2]);
   }
 
   // Signal: Motor_2.MO2_BLS
-  if (msg_matches(msg, MSG_MOTOR_2, 0U)) {
+  if (msg_matches(msg, MSG_MOTOR_2, volkswagen_pq_bus)) {
     brake_pressed = (msg->data[2] & 0x1U);
   }
 }
@@ -154,9 +239,10 @@ static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
   // lateral limits
   const TorqueSteeringLimits VOLKSWAGEN_PQ_STEERING_LIMITS = {
     .max_torque = 300,               // 3.0 Nm (EPS side max of 3.0Nm with fault if violated)
-    .max_rt_delta = 113,             // 6 max rate up * 50Hz send rate * 250000 RT interval / 1000000 = 75 ; 125 * 1.5 for safety pad = 113
-    .max_rate_up = 6,                // 3.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
-    .max_rate_down = 10,             // 5.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
+    // max rate up * 50Hz send rate * 250000 RT interval / 1000000, * 1.5 for safety pad (stock: 6 -> 113)
+    .max_rt_delta = ((volkswagen_pq_max_rate_up * 75) + 3) / 4,
+    .max_rate_up = volkswagen_pq_max_rate_up,      // stock 6: 3.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
+    .max_rate_down = volkswagen_pq_max_rate_down,  // stock 10: 5.0 Nm/s RoC limit (EPS rack has own soft-limit of 5.0 Nm/s)
     .driver_torque_multiplier = 3,
     .driver_torque_allowance = 80,
     .type = TorqueDriverLimited,
@@ -198,6 +284,16 @@ static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
     int desired_accel = ((((msg->data[4] & 0x7U) << 8) | msg->data[3]) * 5U) - 7220U;
 
     if (longitudinal_accel_checks(desired_accel, VOLKSWAGEN_PQ_LONG_LIMITS)) {
+      tx = false;
+    }
+  }
+
+  // StarPinguPilot: mFLA_1 camera lights. Never latch the J519's sticky FLA defect (FL1_ISP_defekt, byte 1 bit 6),
+  // and keep the high beam request within the 0..100 % range (the J519 doubles it unchecked, 127 = error).
+  if (msg->addr == MSG_MFLA_1) {
+    bool defect = GET_BIT(msg, 14U);
+    uint32_t pwm = msg->data[3] & 0x7FU;
+    if (defect || (pwm > 100U)) {
       tx = false;
     }
   }

@@ -4,7 +4,7 @@ from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarControllerBase
-from opendbc.car.volkswagen import mebcan, mlbcan, mqbcan, pqcan
+from opendbc.car.volkswagen import fla, hca_tuning, mebcan, mlbcan, mqbcan, pqcan
 from opendbc.car.volkswagen.values import CanBus, CarControllerParams, VolkswagenFlags
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -44,8 +44,13 @@ class CarController(CarControllerBase):
     if CP.flags & VolkswagenFlags.MEB:
       self.meb_long_state = mebcan.MebLongStateMachine(self.CP, self.CCP)
 
+    self.hca_status = hca_tuning.hca_status(hca_tuning.DEFAULT_HCA_MODE)
     if CP.flags & VolkswagenFlags.PQ:
       self.CCS = pqcan
+      # StarPinguPilot: never exceed the HCA rates the panda latched at startup
+      self.pq_max_delta_rates = hca_tuning.decode_pq_safety_param(CP.safetyConfigs[-1].safetyParam,
+                                                                  self.CCP.STEER_DELTA_UP, self.CCP.STEER_DELTA_DOWN)
+      self.CCP.STEER_DELTA_UP, self.CCP.STEER_DELTA_DOWN = self.pq_max_delta_rates
     elif CP.flags & VolkswagenFlags.MLB:
       self.CCS = mlbcan
     else:
@@ -59,6 +64,10 @@ class CarController(CarControllerBase):
     self.distance_bar_frame = 0
     self.gra_acc_counter_last = None
     self.hca_mitigation = HCAMitigation(self.CCP)
+    # StarPinguPilot: camera lights (mFLA_1) only when the panda latched the light TX bit at startup
+    self.fla_tx = bool(CP.flags & VolkswagenFlags.PQ and CP.safetyConfigs[-1].safetyParam & fla.PQ_LIGHT_TX)
+    # StarPinguPilot: live HCA mode/rate selection, set by openpilot.starpilot.controller_extensions
+    self.pq_hca_input = None
 
   def update(self, CC, CS, now_nanos):
     _projection = self.learning_projection_observer
@@ -67,6 +76,9 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     hud_control = CC.hudControl
     can_sends = []
+
+    if self.CP.flags & VolkswagenFlags.PQ and not CC.latActive and self.pq_hca_input is not None:
+      self.update_pq_hca_tuning(*self.pq_hca_input.read())
 
     # **** Steering Controls ************************************************ #
 
@@ -116,7 +128,10 @@ class CarController(CarControllerBase):
         apply_torque = self.hca_mitigation.update(apply_torque, self.apply_torque_last)
         hca_enabled = apply_torque != 0
         self.apply_torque_last = apply_torque
-        can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled))
+        if self.CP.flags & VolkswagenFlags.PQ:
+          can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled, self.hca_status))
+        else:
+          can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled))
         if _projection is not None:
           _projection.emit('volkswagen.HCA_TORQUE', apply_torque, hca_enabled, can_sends[-1])
 
@@ -201,9 +216,17 @@ class CarController(CarControllerBase):
         can_sends.append(self.CCS.create_acc_hud_control(self.packer_pt, self.CAN.pt, acc_hud_status, set_speed,
                                                          lead_distance, hud_control.leadDistanceBars))
 
+    # **** StarPinguPilot: camera lights for the patched J519 *************** #
+
+    if self.fla_tx and self.frame % fla.FLA_STEP == 0:
+      # set by card from lightd; invalid/off (J519 falls back to G397, no HBA) until lightd publishes
+      light, hba = getattr(CS, "fla_command", (fla.LIGHT_INVALID, fla.HBA_OFF))
+      can_sends.append(fla.create_fla_1(self.packer_pt, self.CAN.pt, light, hba))
+
     # **** Stock ACC Button Controls **************************************** #
 
-    gra_send_ready = self.CP.pcmCruise and CS.gra_stock_values["COUNTER"] != self.gra_acc_counter_last
+    gra_send_ready = self.CP.pcmCruise and CS.gra_stock_values["COUNTER"] != self.gra_acc_counter_last and \
+                     not self.CP.flags & VolkswagenFlags.PQ_CC_ONLY
     if gra_send_ready and (CC.cruiseControl.cancel or CC.cruiseControl.resume):
       button_control = mebcan.create_acc_buttons_control if self.CP.flags & VolkswagenFlags.MEB else self.CCS.create_acc_buttons_control
       can_sends.append(button_control(self.packer_pt, self.CAN.ext, CS.gra_stock_values,
@@ -221,3 +244,10 @@ class CarController(CarControllerBase):
     if _projection is not None:
       _projection.finish(new_actuators.torque)
     return new_actuators, can_sends
+
+  def update_pq_hca_tuning(self, mode_idx, up_idx, down_idx):
+    # StarPinguPilot: pick up HCA mode/rate changes while not steering
+    self.hca_status = hca_tuning.hca_status(mode_idx)
+    up, down = hca_tuning.delta_rates(up_idx, down_idx)
+    self.CCP.STEER_DELTA_UP = min(up, self.pq_max_delta_rates[0])
+    self.CCP.STEER_DELTA_DOWN = min(down, self.pq_max_delta_rates[1])

@@ -60,6 +60,7 @@ from openpilot.starpilot.ui.gm_tune_feature import GmTuneFeature, GmTruckFeature
 from openpilot.starpilot.car.gm.tune_preferences import KEY as GM_TUNE_KEY
 from openpilot.starpilot.car.gm.radar_recovery import KEY as RADAR_RECOVERY_KEY
 from openpilot.starpilot.ui.volt_radar_feature import VoltRadarFeature
+from openpilot.starpilot.ui.volkswagen_pq_feature import VolkswagenPqFeature, KEYS as VOLKSWAGEN_PQ_KEYS  # StarPinguPilot
 from openpilot.starpilot.ui.panda_wake_feature import PandaWakeFeature
 from openpilot.starpilot.panda_wake import KEYS as PANDA_WAKE_KEYS
 from openpilot.starpilot.saved_document import commit_exact
@@ -171,6 +172,7 @@ class FeatureSettingsOwner:
     self.gm_tune = GmTuneFeature(self)
     self.gm_truck = GmTruckFeature(self)
     self.gm_ev_preset = GmEvPresetFeature(self)
+    self.volkswagen_pq = VolkswagenPqFeature(self)  # StarPinguPilot
     self.volt_radar = VoltRadarFeature(self, galaxy=galaxy)
     self.panda_wake = PandaWakeFeature(self, galaxy=galaxy)
     self.traffic_profiles = TrafficFeature(self)
@@ -847,7 +849,8 @@ class FeatureSettingsOwner:
           self._gm_stop_capability("GMAutoHold") is not None or self.tesla_screen.capability() is not None or
           self.gm_tune.capability() is not None or self.gm_truck.capability() is not None or
           self.gm_ev_preset.capability() is not None or self.volt_radar.capability() is not None or
-          self.panda_wake.capability() is not None or preap_radar_capability(self.vehicle_params()) is not None):
+          self.panda_wake.capability() is not None or preap_radar_capability(self.vehicle_params()) is not None or
+          self.volkswagen_pq.capability() is not None):  # StarPinguPilot
         rows.append(FeatureRow("", "Vehicle Settings", "Configure features supported by your vehicle", page=FeaturePage.VEHICLE, available=True))
       rows.append(FeatureRow("", "Driving Personalities", "Adjust Aggressive, Standard, Relaxed and Traffic profiles",
                              page=FeaturePage.PERSONALITIES, available=True))
@@ -894,6 +897,7 @@ class FeatureSettingsOwner:
       rows.extend(self.gm_tune.rows(parked))
       rows.extend(self.gm_truck.rows(parked))
       rows.extend(self.gm_ev_preset.rows(parked))
+      rows.extend(self.volkswagen_pq.rows(parked))  # StarPinguPilot
       rows.extend(self.volt_radar.rows())
       rows.extend(row for row in self.panda_wake.rows(parked) if row.key != "IgnoreIgnitionLine")
       pedal_capability = self._pedal_setup_capability()
@@ -1379,6 +1383,8 @@ class FeatureSettingsOwner:
       return self.volt_radar.apply(request)
     if key == "EVTuning":
       return self.gm_ev_preset.apply(request)
+    if key in VOLKSWAGEN_PQ_KEYS:  # StarPinguPilot
+      return self.volkswagen_pq.apply(request)
     if key == "TruckTuning":
       return self.gm_truck.apply(request)
     if key == "DisableOpenpilotLongitudinal":

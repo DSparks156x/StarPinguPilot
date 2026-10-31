@@ -107,6 +107,15 @@ def parked_camera(started: bool, params: Params, CP: car.CarParams) -> bool:
 def livestream(started: bool, params: Params, CP: car.CarParams) -> bool:
   return params.get_bool("IsLiveStreaming")
 
+# StarPinguPilot: camera auto headlights + HBA for Volkswagen PQ (VolkswagenLightdMode >= 1)
+def lightd(started: bool, params: Params, CP: car.CarParams) -> bool:
+  from openpilot.starpilot.car.volkswagen.pq_preferences import lightd_mode, pq
+  return started and pq(CP) and lightd_mode(params) >= 1
+
+# StarPinguPilot
+def pingulink(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return params.get_bool("PingulinkEnable")
+
 def or_(*fns):
   return lambda *args: operator.or_(*(fn(*args) for fn in fns))
 
@@ -185,6 +194,8 @@ procs = [
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),
   PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=not PC),
   PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run),
+  PythonProcess("pingulink_uploader", "openpilot.system.pingulink.uploader", pingulink),  # StarPinguPilot
+  PythonProcess("lightd", "openpilot.starpilot.system.lightd.lightd", lightd),  # StarPinguPilot
 
   # debug procs
   NativeProcess("bridge", "openpilot/cereal/messaging", ["./bridge"], notcar),

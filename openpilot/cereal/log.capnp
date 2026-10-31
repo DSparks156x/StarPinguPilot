@@ -2661,6 +2661,9 @@ struct Event {
     mapdExtendedOut @143 :Custom.MapdExtendedOut;
     mapdIn @144 :Custom.MapdIn;
     mapdOut @145 :Custom.MapdOut;
+    # StarPinguPilot: lightd. The only fork Event outside the reserved slots (all taken), allow-listed in
+    # tools/ci/schema-policy.json "pingu_log_additions". Renumber if upstream openpilot claims @154.
+    starpilotLightState @154 :Custom.StarPilotCarState.LightState;
 
     # *********** legacy + deprecated ***********
     model @9 :Deprecated.ModelData; # TODO: rename modelV2 and mark this as deprecated

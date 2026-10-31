@@ -84,6 +84,11 @@ DESCRIPTIONS = {
   'GMLongitudinalTune': 'Selects the supported vehicle speed-control response tune.',
   'TruckTuning': 'Softens small acceleration requests, reduces grade correction and smooths light braking on supported GM trucks.',
   'EVTuning': 'Selects EV acceleration curves for inherited acceleration presets.',
+  # StarPinguPilot: Volkswagen PQ
+  'VolkswagenHCAMode': 'Chooses the HCA status sent to the power steering while StarPilot steers.',
+  'VolkswagenHCADeltaRateUp': 'Sets how quickly steering torque may rise, in HCA counts per frame.',
+  'VolkswagenHCADeltaRateDown': 'Sets how quickly steering torque may fall, in HCA counts per frame.',
+  'VolkswagenLightdMode': 'Chooses camera-controlled headlights: off, shadow logging only, automatic low beam, or low beam with high beam assist.',
   'FordLateralMode': 'Chooses the native Ford steering controller or the supported BluePilot angle controller.',
   'TeslaAOLScreenTap': 'Lets a three-finger tap on a supported Tesla screen toggle Always On Lateral.',
   'TeslaAOLDisengageOnBrake': 'Disarms screen-tap Always On Lateral when you press the brake.',
@@ -102,6 +107,7 @@ DESCRIPTIONS = {
   'LeadInfo': 'Shows the lead vehicle distance or speed beside its indicator.',
   'SignalMetrics': 'Shows an amber border for turn signals on comma 4.',
   'BlindSpotMetrics': 'Shows a red border for blind-spot warnings on comma 4.',
+  'ShowTamagotchi': 'Shows a little Pingu on the driving screen that reacts to how you drive.',  # StarPinguPilot
   'StarPilotDisplayPreferencesEnabled': 'Uses your configured screen brightness and display timeouts.',
   'ScreenBrightness': 'Sets screen brightness while parked. Auto follows the normal brightness policy.',
   'ScreenBrightnessOnroad': 'Sets screen brightness while driving. Auto follows the normal brightness policy.',

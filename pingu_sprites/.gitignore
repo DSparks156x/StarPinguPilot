@@ -1,0 +1,3 @@
+# generated source strips (~75 MB) and previews stay local; the packed sheet is in selfdrive/assets
+strips/
+preview*.gif

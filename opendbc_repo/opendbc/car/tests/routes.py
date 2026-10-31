@@ -141,6 +141,9 @@ non_tested_cars = [
   # These are on the 2-bit DAS_steeringControlType firmware, which is dashcam only, need new routes
   TESLA.TESLA_MODEL_X,
 
+  # StarPinguPilot: no public routes yet
+  VOLKSWAGEN.AUDI_TT_MK2,
+
 ]
 
 

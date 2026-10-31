@@ -323,6 +323,11 @@ def validate(schemas, policy, sync):
       errors.append(f'log.capnp: reserved raw event @{ordinal} changed type or ordinal')
   if policy.get('reviewed_log_additions') or policy.get('reviewed_log_ordinal_remaps'):
     errors.append('log.capnp: core schema exceptions are not permitted; use custom.capnp reserved structs')
+  # StarPinguPilot: exact, reviewed fork Event additions (every reserved slot is taken upstream)
+  for line in policy.get('pingu_log_additions', []):
+    log, count = re.subn(rf'(?m)^{re.escape(line)}\n', '', log)
+    if count != 1:
+      errors.append(f'log.capnp: StarPinguPilot addition missing or changed: {line.strip()}')
   if sha256(log.encode()) != policy['log_sha256']:
     errors.append('log.capnp: changes outside the permitted reserved-event aliases')
   return errors

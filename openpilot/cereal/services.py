@@ -71,6 +71,7 @@ _services: dict[str, tuple] = {
   "aolIntentWire": (True, 100., 10),
   "laneChangeAssistWire": (True, 20., 10),
   "mapdOut": (True, 20., 10),
+  "starpilotLightState": (True, 20., 20),  # StarPinguPilot: lightd
   "mapdExtendedOut": (True, 1., 1),
   "mapdIn": (True, 1., 1),
   "lateralManeuverPlan": (True, 20.),

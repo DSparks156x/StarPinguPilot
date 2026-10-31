@@ -14,6 +14,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.hardware import HARDWARE
 from openpilot.tools.lib.kbhit import KBHit
 from openpilot.tools.joystick.devices import refresh_gamepads
+from openpilot.tools.joystick.steam_controller import SteamControllerReader
 
 EXPO = 0.4
 
@@ -23,6 +24,8 @@ CONTROLLER_PROFILES = {
   'X-Box':     {'name': 'Xbox',      'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': -32768., 'hi': 32767.},
   'DualSense': {'name': 'DualSense', 'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': 0.,      'hi': 255.},
   'Wireless Controller': {'name': 'DualShock 4', 'steer': 'ABS_X', 'accel': 'ABS_RZ', 'lo': 0., 'hi': 255.},
+  # StarPinguPilot: read over hidraw by steam_controller.py (no kernel driver on 4.9); axis names are labels only
+  'Steam':     {'name': 'Steam',     'steer': 'ABS_X', 'accel': 'ABS_RY', 'lo': -32768., 'hi': 32767.},
 }
 DEFAULT_PROFILE = 'X-Box'
 
@@ -58,11 +61,12 @@ class Joystick:
     self.cancel_button = 'BTN_NORTH'  # BTN_NORTH=X/triangle
     self.is_pc = HARDWARE.get_device_type() == 'pc'
     self._last_scan = 0.
+    self._steam = SteamControllerReader()
     if not self.is_pc:
       refresh_gamepads()
     self._load_profile()
 
-  def _load_profile(self):
+  def _load_profile(self, profile: str | None = None):
     if self.is_pc:
       # DualSense over a laptop for development
       accel_axis, steer_axis = 'ABS_Z', 'ABS_RX'
@@ -70,7 +74,7 @@ class Joystick:
       raw_min, raw_max, self.deadzone = 0., 255., 0.03
       name, prof_name = 'pc', 'pc'
     else:
-      name = inputs.devices.gamepads[0].name if inputs.devices.gamepads else ''
+      name = profile or (inputs.devices.gamepads[0].name if inputs.devices.gamepads else '')
       prof = next((p for key, p in CONTROLLER_PROFILES.items() if key in name), CONTROLLER_PROFILES[DEFAULT_PROFILE])
       accel_axis, steer_axis = prof['accel'], prof['steer']
       self.flip_map = {}
@@ -92,9 +96,39 @@ class Joystick:
     self._last_scan = now
     refresh_gamepads()
     if not self.is_pc and inputs.devices.gamepads:
+      self._steam.close()
       self._load_profile()
+    elif not self.is_pc and not self._steam.is_open and self._steam.open():
+      # StarPinguPilot: no evdev pad, fall back to a Steam Controller over hidraw
+      self._load_profile('Steam')
+      cloudlog.info(f"joystick_control: using Steam Controller at {', '.join(self._steam.fds.values())}")
+
+  def _update_steam(self):
+    # StarPinguPilot
+    handled = self._steam.poll()
+    if not self._steam.is_open:
+      self.axes_values = dict.fromkeys(self.axes_values, 0.)
+      self.cancel = False
+      return False
+    s = self._steam.state
+    accel_axis, steer_axis = self.axes_order
+    # same layout as the other pads: left stick X steers, right stick Y is gas (up) / brake (down)
+    accel = s.right_y / 32767.
+    steer = -s.left_x / 32767.  # stick left = positive (left) torque
+    for axis, norm in ((accel_axis, accel), (steer_axis, steer)):
+      norm = float(np.clip(norm, -1., 1.))
+      norm = norm if abs(norm) > self.deadzone else 0.
+      self.axes_values[axis] = EXPO * norm ** 3 + (1 - EXPO) * norm
+    self.cancel = s.y_button
+    return handled
 
   def update(self):
+    if self._steam.is_open:
+      if not inputs.devices.gamepads:
+        self._rescan()
+        return self._update_steam()
+      self._steam.close()
+      self._load_profile()
     try:
       joystick_event = get_gamepad()[0]
     except (OSError, UnpluggedError):

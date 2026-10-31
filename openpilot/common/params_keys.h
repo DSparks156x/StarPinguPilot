@@ -379,4 +379,17 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"JetlinkPointers", {PERSISTENT | DONT_LOG, JSON}},
     {"JetlinkProgress", {CLEAR_ON_MANAGER_START | DONT_LOG, JSON}},
     {"Version", {PERSISTENT, STRING}},
+
+    // StarPinguPilot
+    {"ShowTamagotchi", {PERSISTENT, BOOL, "0"}},
+    {"VolkswagenHCADeltaRateDown", {PERSISTENT, INT, "0"}},
+    {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0"}},
+    {"VolkswagenHCAMode", {PERSISTENT, INT, "1"}},
+    {"VolkswagenLightdMode", {PERSISTENT, INT, "0"}},
+    {"PingulinkEnable", {PERSISTENT, BOOL, "0"}},
+    {"PingulinkUrl", {PERSISTENT, STRING}},
+    {"PingulinkToken", {PERSISTENT | DONT_LOG, STRING}},
+    {"PingulinkLastPing", {PERSISTENT, STRING}},
+    {"PingulinkLastPingStatus", {PERSISTENT, STRING}},
+    {"PingulinkPendingCount", {PERSISTENT, STRING}},
 };

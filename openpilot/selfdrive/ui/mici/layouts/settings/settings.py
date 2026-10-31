@@ -1,3 +1,4 @@
+from functools import cached_property
 from openpilot.common.params import Params
 from openpilot.system.ui.widgets.scroller import NavScroller
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
@@ -39,15 +40,24 @@ class SettingsLayout(NavScroller):
     developer_btn = SettingsBigButton("developer", "", gui_app.texture("icons_mici/settings/developer_icon.png", 64, 60))
     developer_btn.set_click_callback(lambda: gui_app.push_widget(developer_panel))
 
+    pingulink_btn = SettingsBigButton("pingulink", "", gui_app.texture("icons_mici/settings.png", 64, 64))  # StarPinguPilot
+    pingulink_btn.set_click_callback(lambda: gui_app.push_widget(self._pingulink_panel))
+
     self._scroller.add_widgets([
       toggles_btn,
       network_btn,
       self._device_button,
       software_btn,
+      pingulink_btn,
       developer_btn,
     ])
 
     self._font_medium = gui_app.font(FontWeight.MEDIUM)
+
+  @cached_property
+  def _pingulink_panel(self):  # StarPinguPilot
+    from openpilot.selfdrive.ui.mici.layouts.settings.pingulink import PingulinkLayoutMici
+    return PingulinkLayoutMici()
 
   def show_pairing(self):
     gui_app.push_widget(self)

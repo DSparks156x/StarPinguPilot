@@ -137,6 +137,7 @@ class UIState:
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
+        "starpilotLongitudinalPlan",  # StarPinguPilot: tamagotchi force-stop animation
         *(["customReserved6", "cabinCameraState", "narrowRoadEncodeIdx", "wideRoadEncodeIdx", "cabinEncodeIdx"]
           if self.replay_clock is not None else []),
       ],
@@ -189,6 +190,7 @@ class UIState:
     self.is_body: bool | None = False
     self.CP: car.CarParams | None = None
     self.light_sensor: float = -1.0
+    self.show_tamagotchi: bool = False  # StarPinguPilot
 
     self._params_thread: threading.Thread | None = None
     self._projection_params_at: float | None = None
@@ -480,6 +482,7 @@ class UIState:
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
     self.navigation_enabled = self.params.get_bool("NavigationEnabled")
     self.nav_destination_set = self.params.get("NavDestination") is not None
+    self.show_tamagotchi = self.params.get_bool("ShowTamagotchi")  # StarPinguPilot
     raw_chestnut = self.params.get("ChestnutActive")
     self.chestnut_active = raw_chestnut if type(raw_chestnut) is bool else (
       True if raw_chestnut in (b"1", "1") else False if raw_chestnut in (b"0", "0") else None)

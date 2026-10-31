@@ -12,6 +12,7 @@ from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.widgets.tamagotchi import TamagotchiWidget
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
 
@@ -49,6 +50,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    self._tamagotchi: TamagotchiWidget | None = None  # StarPinguPilot, loaded on first use
 
   def render_camera_model_layer(self, rect: rl.Rectangle, *, camera_view: int = CAMERA_VIEW_AUTO,
                                 reverse_driver: bool = False, road_style: dict | None = None,
@@ -81,6 +83,14 @@ class AugmentedRoadView(CameraView):
 
   def render_model_source_layer(self, rect: rl.Rectangle, *, show_long_indicator: bool | None = False) -> None:
     self._hud_renderer._draw_model_source(rect)
+
+  def render_tamagotchi_layer(self, rect: rl.Rectangle, margin: float = 20.) -> None:
+    """StarPinguPilot: Pingu in the bottom-right corner of the road camera."""
+    if self.stream_type == DRIVER_CAM:
+      return
+    if self._tamagotchi is None:
+      self._tamagotchi = TamagotchiWidget(scale=0.75)
+    self._tamagotchi.render_corner(rect, margin)
 
   def _render(self, rect, *, poll_camera: bool = True):
     # Only render when system is started to avoid invalid data access
@@ -115,6 +125,8 @@ class AugmentedRoadView(CameraView):
     # Draw all UI overlays
     self.model_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
+    if ui_state.show_tamagotchi:  # StarPinguPilot
+      self.render_tamagotchi_layer(self._content_rect)
     self.alert_renderer.render(self._content_rect)
     self.driver_state_renderer.render(self._content_rect)
 

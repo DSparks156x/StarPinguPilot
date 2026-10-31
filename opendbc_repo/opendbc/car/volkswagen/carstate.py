@@ -3,6 +3,7 @@ from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.common.conversions import Conversions as CV
+from opendbc.car.volkswagen import fla
 from opendbc.car.volkswagen.values import DBC, CanBus, NetworkLocation, TransmissionType, GearShifter, \
                                                       CarControllerParams, VolkswagenFlags
 
@@ -26,6 +27,8 @@ class CarState(CarStateBase):
     self.acc_type = 0
     self.travel_assist_available = False
     self.curvature_meas = 0.
+    self.light_state: fla.CarLights | None = None  # StarPinguPilot: TT only, see update_pq
+    self.fla_command = (fla.LIGHT_INVALID, fla.HBA_OFF)  # StarPinguPilot: set by card from lightd
 
   def update_button_enable(self, buttonEvents: list[structs.CarState.ButtonEvent]):
     if not self.CP.pcmCruise:
@@ -214,20 +217,25 @@ class CarState(CarStateBase):
     ret.stockFcw = False
     ret.stockAeb = False
 
-    # Update ACC radar status.
-    self.acc_type = ext_cp.vl["ACC_System"]["ACS_Typ_ACC"]
     ret.cruiseState.available = bool(pt_cp.vl["Motor_5"]["MO5_GRA_Hauptsch"])
     ret.cruiseState.enabled = pt_cp.vl["Motor_2"]["MO2_Sta_GRA"] in (1, 2)
-    if self.CP.pcmCruise:
-      ret.accFaulted = ext_cp.vl["ACC_GRA_Anzeige"]["ACA_StaACC"] in (6, 7)
-    else:
+    if self.CP.flags & VolkswagenFlags.PQ_CC_ONLY:
+      # StarPinguPilot: plain cruise control, no ACC radar messages
       ret.accFaulted = pt_cp.vl["Motor_2"]["MO2_Sta_GRA"] == 3
+      ret.cruiseState.speed = pt_cp.vl["Motor_2"]["MO2_GRA_Soll"] * CV.KPH_TO_MS
+    else:
+      # Update ACC radar status.
+      self.acc_type = ext_cp.vl["ACC_System"]["ACS_Typ_ACC"]
+      if self.CP.pcmCruise:
+        ret.accFaulted = ext_cp.vl["ACC_GRA_Anzeige"]["ACA_StaACC"] in (6, 7)
+      else:
+        ret.accFaulted = pt_cp.vl["Motor_2"]["MO2_Sta_GRA"] == 3
 
-    # Update ACC setpoint. When the setpoint reads as 255, the driver has not
-    # yet established an ACC setpoint, so treat it as zero.
-    ret.cruiseState.speed = ext_cp.vl["ACC_GRA_Anzeige"]["ACA_V_Wunsch"] * CV.KPH_TO_MS
-    if ret.cruiseState.speed > 70:  # 255 kph in m/s == no current setpoint
-      ret.cruiseState.speed = 0
+      # Update ACC setpoint. When the setpoint reads as 255, the driver has not
+      # yet established an ACC setpoint, so treat it as zero.
+      ret.cruiseState.speed = ext_cp.vl["ACC_GRA_Anzeige"]["ACA_V_Wunsch"] * CV.KPH_TO_MS
+      if ret.cruiseState.speed > 70:  # 255 kph in m/s == no current setpoint
+        ret.cruiseState.speed = 0
 
     # Update button states for turn signals and ACC controls, capture all ACC button state/config for passthrough
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_stalk(300, pt_cp.vl["Gate_Komf_1"]["GK1_Blinker_li"],
@@ -239,6 +247,19 @@ class CarState(CarStateBase):
     ret.espDisabled = bool(pt_cp.vl["Bremse_1"]["BR1_ESPASR_passive"])
 
     ret.lowSpeedAlert = self.update_low_speed_alert(ret.vEgo)
+
+    # StarPinguPilot: light state for lightd, published by card in starpilotCarState. Gate_Komf_2 is only known to be
+    # present on the TT, and parsers add messages lazily, so other PQ cars never subscribe to it (a missing message
+    # would drop canValid).
+    if self.CP.flags & VolkswagenFlags.NO_EXT_CAN:
+      self.light_state = fla.CarLights(
+        lowBeamOn=bool(pt_cp.vl["Gate_Komf_1"]["GK1_Abblendlicht"]),
+        highBeamOn=bool(pt_cp.vl["Gate_Komf_1"]["GK1_Fernlicht"]),
+        highBeamStalk=bool(pt_cp.vl["Gate_Komf_1"]["GK1_LS1_Fernlicht"]),
+        frontWipersOn=bool(pt_cp.vl["Gate_Komf_1"]["GK1_Wischer_vorn"]),
+        lightSensorBucket=int(round(pt_cp.vl["Gate_Komf_2"]["GK2_Helligkeit"] / 714.286)),
+        lightSensorFault=bool(pt_cp.vl["Gate_Komf_2"]["GK2_LS_def"]),
+      )
 
     self.frame += 1
     return ret

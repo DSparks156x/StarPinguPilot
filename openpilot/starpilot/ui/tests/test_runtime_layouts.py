@@ -25,15 +25,16 @@ class TestOptInLayouts(unittest.TestCase):
     layout = runtime_app.StarMiciMainLayout.__new__(runtime_app.StarMiciMainLayout)
     layout.star = self._session()
     layout._compact_panels = {}
-    panel, entry, replay = Mock(), Mock(), Mock()
+    panel, entry, replay, pingulink = Mock(), Mock(), Mock(), Mock()
     with patch.object(device_layout, "DeviceLayoutMici", return_value=panel) as create, \
          patch.object(DisplayCompact, "entry_button", return_value=entry), \
          patch.object(replay_settings, "replay_entry", return_value=replay), \
+         patch.object(runtime_app, "_pingulink_entry", return_value=pingulink), \
          patch.object(runtime_app.gui_app, "push_widget") as push:
       layout._open_compact_destination(runtime_app.Destination.DEVICE)
       layout._open_compact_destination(runtime_app.Destination.DEVICE)
       create.assert_called_once()
-      panel._scroller.add_widgets.assert_called_once_with([entry, replay])
+      panel._scroller.add_widgets.assert_called_once_with([entry, replay, pingulink])  # StarPinguPilot: pingulink
       self.assertEqual(push.call_count, 2)
       push.assert_called_with(panel)
 

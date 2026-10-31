@@ -433,6 +433,10 @@ class Car:
     self.slc_control_enabled = self.slc_replay and self.slc_configuration[1].enabled
     self.slc_source_floor_ns = 0
 
+    # StarPinguPilot: lightd -> mFLA_1 camera lights, only when the panda latched the light TX bit at car start
+    from openpilot.starpilot.car.volkswagen.lights import LightCommandSource, light_tx_latched
+    self.light_command_source = LightCommandSource(self.params) if light_tx_latched(self.CP) and not self.CP.passive else None
+
     # Write previous route's CarParams
     prev_cp = get_cache(self.params, "CarParamsPersistent")
     if prev_cp is not None:
@@ -1122,6 +1126,9 @@ class Car:
         companion = messaging.new_message('starpilotCarState', valid=bool(cs_send.valid), logMonoTime=int(cs_send.logMonoTime))
       companion.starpilotCarState.sourceCarStateMonoTime = int(cs_send.logMonoTime)
       self.v_cruise_helper.toyota.publish(companion.starpilotCarState.toyotaCruise)
+    if self.CP.brand == 'volkswagen':
+      from openpilot.starpilot.car.volkswagen.lights import compose as compose_lights
+      companion = compose_lights(self.CI.CS, companion, valid=bool(cs_send.valid), car_state_stamp=int(cs_send.logMonoTime))
     self.car_gps_publisher.update(self.CI.CS, self.pm, companion)
     self.pm.send('carState', cs_send)
     if getattr(self, 'learning_stamp_observer', None) is not None:
@@ -1780,6 +1787,9 @@ class Car:
         update_subaru_sng(self, CS, CC, now_nanos)
         from openpilot.starpilot.car.subaru.stop_start_caller import update as update_subaru_startup
         update_subaru_startup(self, now_nanos)
+      light_command_source = getattr(self, 'light_command_source', None)
+      if light_command_source is not None:
+        light_command_source.update(self.CI.CS)  # StarPinguPilot
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos)
       self.publish_sendcan(can_sends, valid=CS.canValid)
       if learning_snapshot is not None and self.learning_send_committed_mono_ns:

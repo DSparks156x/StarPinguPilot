@@ -975,7 +975,7 @@ class SafetyTest(SafetyTestBase):
               continue
             if attr.startswith('TestSubaruPreglobal') and current_test.startswith('TestSubaruPreglobal'):
               continue
-            if {attr, current_test}.issubset({'TestVolkswagenPqSafety', 'TestVolkswagenPqStockSafety', 'TestVolkswagenPqLongSafety'}):
+            if attr.startswith('TestVolkswagenPq') and current_test.startswith('TestVolkswagenPq'):  # StarPinguPilot: PQ variants
               continue
             if {attr, current_test}.issubset({'TestGmCameraSafety', 'TestGmCameraLongitudinalSafety', 'TestGmAscmSafety',
                                               'TestGmCameraEVSafety', 'TestGmCameraLongitudinalEVSafety', 'TestGmAscmEVSafety'}):
@@ -1020,6 +1020,10 @@ class SafetyTest(SafetyTestBase):
               # generic cross-mode probe fabricates eight bytes, which the refresh
               # variant accepts; exact 4/8-byte and bus checks live in Hyundai tests.
               tx = list(filter(lambda m: m[:2] != [0x485, 0], tx))
+
+            # StarPinguPilot: the PQ camera-light frame (mFLA_1 0x65A, not actuating) is inside ELM327's diagnostic range
+            if attr == 'TestElm327' and current_test == 'TestVolkswagenPqLightSafety':
+              tx = list(filter(lambda m: m[0] != 0x65A, tx))
             all_tx.append([[m[0], m[1], attr] for m in tx])
 
     # Independent protocol/whole-caller test files need not declare a SafetyTest

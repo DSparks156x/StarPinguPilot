@@ -657,10 +657,12 @@ class TestRuntimePanelActions(unittest.TestCase):
     with patch.object(compact_device, "DeviceLayoutMici", return_value=panel) as built, \
          patch.object(display_compact.DisplayCompact, "entry_button", return_value=display_entry), \
          patch.object(replay_settings, "BigButton", return_value=replay_button) as replay_constructor, \
+         patch.object(runtime_app, "_pingulink_entry", return_value="pingulink entry"), \
          patch.object(runtime_app.gui_app, "push_widget") as pushed:
       layout._open_compact_destination(Destination.DEVICE)
     built.assert_called_once_with()
-    panel._scroller.add_widgets.assert_called_once_with([display_entry, replay_button])
+    # StarPinguPilot: + Pingulink entry
+    panel._scroller.add_widgets.assert_called_once_with([display_entry, replay_button, "pingulink entry"])
     pushed.assert_called_once_with(panel)
     layout._open_compact_destination(Destination.GALAXY)
     galaxy.open_compact.assert_called_once_with()
@@ -705,6 +707,7 @@ class TestRuntimePanelActions(unittest.TestCase):
          patch.object(compact_device, "DeviceLayoutMici", return_value=panel), \
          patch.object(display_compact.DisplayCompact, "entry_button", return_value="display entry"), \
          patch.object(replay_settings, "BigButton", return_value=replay_button) as replay_constructor, \
+         patch.object(runtime_app, "_pingulink_entry", return_value="pingulink entry"), \
          patch.object(runtime_app.gui_app, "push_widget") as pushed:
       layout._open_compact_destination(Destination.DRIVING_MODEL)
       layout._open_compact_destination(Destination.APPEARANCE)
@@ -713,7 +716,7 @@ class TestRuntimePanelActions(unittest.TestCase):
     visuals_open.assert_called_once_with()
     pushed.assert_called_once_with(panel)
     panel.scroll_to_pairing.assert_called_once_with()
-    panel._scroller.add_widgets.assert_called_once_with(["display entry", replay_button])
+    panel._scroller.add_widgets.assert_called_once_with(["display entry", replay_button, "pingulink entry"])  # StarPinguPilot
 
     replay_constructor.assert_called_once_with("replay", "recorded driving routes on this device")
     replay_button.set_click_callback.assert_called_once()

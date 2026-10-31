@@ -319,6 +319,12 @@ def configure_controller(CI, params):
       controller.ioniq6_lead_inputs = None
       cloudlog.exception('Optional Ioniq 6 lead input transport unavailable')
 
+  # StarPinguPilot: live HCA mode/rate selection for Volkswagen PQ
+  if controller is not None and hasattr(controller, 'pq_hca_input'):
+    from openpilot.starpilot.car.volkswagen.pq_preferences import HcaPreference, pq
+    if pq(cp):
+      controller.pq_hca_input = HcaPreference(params)
+
   if controller is not None and getattr(controller, 'torque_ev_scc_enabled', False):
     from openpilot.starpilot.longitudinal.canfd_lead import CANFDLeadInputs
     try:

@@ -91,6 +91,7 @@ DEFAULTS = {
   "SignalMetrics": False,
   "ShowSpeedLimits": True,
   "UseVienna": False,
+  "ShowTamagotchi": False,  # StarPinguPilot
 }
 MAX_RAW_BYTES = 16
 # Superseded by the onroad customization document; read only to retire them.
@@ -170,6 +171,7 @@ class OnroadAppearance:
   driver_camera_on_reverse: bool = False
   hide_personality_alerts: bool = False
   wheel_pedal_feedback: bool = False
+  show_tamagotchi: bool = False  # StarPinguPilot
 
 
 def onroad_appearance(params: Any) -> OnroadAppearance:
@@ -196,4 +198,5 @@ def onroad_appearance(params: Any) -> OnroadAppearance:
     lead_info_metric=metric,
     camera_view=camera_view if camera_view is not None else CameraViewChoice.STANDARD,
     driver_camera_on_reverse=values["DriverCamera"] is True,
+    show_tamagotchi=values["ShowTamagotchi"] is True,  # StarPinguPilot
   )

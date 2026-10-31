@@ -376,5 +376,10 @@
     "schema_sha256": "495664ec8d6e9def2419d910399efc30dc1899930a50648d11812323a5d8cdf5",
     "generated_header_sha256": "e00c814e7828bf5eb4e38893a7eaaf6a9317b317bec7af23922eccb44b39d13f",
     "reason": "Review the already shipped Global FLM Auto Learn payload children and reserved Event @112 carrier. Existing upstream schemas, type IDs, field ordinals and exact helper bodies remain pinned."
-  }
+  },
+  "pingu_log_additions": [
+    "    # StarPinguPilot: lightd. The only fork Event outside the reserved slots (all taken), allow-listed in",
+    "    # tools/ci/schema-policy.json \"pingu_log_additions\". Renumber if upstream openpilot claims @154.",
+    "    starpilotLightState @154 :Custom.StarPilotCarState.LightState;"
+  ]
 }

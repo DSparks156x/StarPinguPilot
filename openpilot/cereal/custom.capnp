@@ -216,6 +216,55 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
   feedbackPublication @37 :FeedbackPublication;
   toyotaCruise @38 :ToyotaCruise;
 
+  # StarPinguPilot: Audi TT Mk2 light state for lightd (Gate_Komf_1 / Gate_Komf_2)
+  lowBeamOn @39 :Bool;
+  highBeamOn @40 :Bool;
+  highBeamStalk @41 :Bool;
+  frontWipersOn @42 :Bool;
+  lightSensorBucket @43 :UInt8;  # G397 ambient code 0..7 (GK2_Helligkeit), 255 = not available
+  lightSensorFault @44 :Bool;
+
+  # StarPinguPilot: camera auto headlights + high beam assist, see openpilot/starpilot/system/lightd/DESIGN.md.
+  # Published by lightd as its own Event (starpilotLightState), only nested here because every reserved slot is taken.
+  struct LightState {
+    mode @0 :UInt8;  # VolkswagenLightdMode: 0 off, 1 shadow (log only), 2 low beam, 3 low beam + HBA
+
+    # low beam (patched J519 replaces the G397 request with these)
+    lowBeamValid @1 :Bool;
+    darkRequest @2 :Bool;
+    brightnessCode @3 :UInt8;  # 0..7 ambient code for the coming/leaving-home comparator, low = dark
+    ambientLog2Lux @4 :Float32;
+    fastLog2Lux @5 :Float32;
+    slowLog2Lux @6 :Float32;
+    wideLog2Lux @7 :Float32;
+    narrowLog2Lux @8 :Float32;
+    darkSlow @9 :Bool;
+    darkTunnel @10 :Bool;
+    nightLatch @11 :Bool;
+    confidence @12 :Float32;
+    regime @13 :UInt8;  # 0 unknown, 1 night, 2 twilight, 3 day
+    solarElevationDeg @14 :Float32;
+    solarAzimuthDeg @15 :Float32;
+    solarValid @16 :Bool;
+    tunnelCue @17 :Float32;
+
+    # high beam assist (mFLA_1 0x65A fields)
+    hbaValid @18 :Bool;
+    highBeamPermitted @19 :Bool;
+    hbaReason @20 :UInt8;  # FL1_Abblendursache bits
+    sensorBlocked @21 :Bool;
+    oncomingCount @22 :UInt8;
+    precedingCount @23 :UInt8;
+    candidateCount @24 :UInt8;
+    hbaClearForS @25 :Float32;
+    hbaFrameId @26 :UInt32;
+
+    # health
+    wideFrameAgeMs @27 :Float32;
+    narrowFrameAgeMs @28 :Float32;
+    hbaProcessingMs @29 :Float32;
+  }
+
   struct ToyotaCruise {
     version @0 :UInt16;
     status @1 :Text;
