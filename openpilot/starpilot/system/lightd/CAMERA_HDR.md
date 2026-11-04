@@ -1,7 +1,9 @@
 # Short-exposure frames for lightd (comma 4 / OS04C10 stagger HDR)
 
-Status: investigation only, no code. Verdict below is **medium-hard**, so per the brief nothing is implemented yet.
-Date: 2026-10-24. Tree: `pingu` @ f9f5507015.
+Status: **implemented, not yet run on a device** (2026-11-04, section 11), behind the param `CameraShortExposure`, off
+by default. Sections 1-10 are the investigation from 2026-10-24 (tree `pingu` @ f9f5507015, before the StarPilot 7 port:
+paths there are relative to `openpilot/`). The verdict was medium-hard because the stagger mode makes openpilot's road
+frames RAW10. The user chose to build it anyway: telling headlights from signs needs a short exposure.
 
 ## 1. The question
 
@@ -268,3 +270,82 @@ Phase 3, driving (only after phases 1-2 pass):
 6. FSIN slave behaviour when the master is linear and the slave stagger, or the other way round, at equal frame period.
 7. Can the short exposure be windowed (top half only) or vertically subsampled to cut bandwidth, so RAW12 fits at 776 Mbps?
 8. Black-level target registers (0x4002/0x4003, 0x4090) and whether BLC behaves differently in RAW10 vs RAW12.
+
+## 11. Implementation (2026-11-04)
+
+Option A from section 6, built for the road and wide cameras together (both must keep the same frame timing). The cabin
+camera is untouched: it stays linear RAW12 through the BPS. Nothing changes with the param off; that path was checked
+against the old code: same register table, same exposure writes, same acquire, and the same packets byte for byte.
+
+**Sensor** (`system/camerad/sensors/os04c10*.{cc,h}`). `stagger_patch_os04c10[]` holds the 15 register values that turn
+our linear table into #36806's effective stagger table: the PR's `init_array` plus its full-resolution override. A diff
+of the two tables shows exactly those 15 differ, and nothing else. `OS04C10::stagger_configure()` patches them into the
+init table in place, keeping the write order, so the PLL is still set first. A host check confirms the result equals the
+PR's table. It also sets:
+- RAW10 (`CSI_RAW10`, `bits_per_pixel` 10, stride 3360);
+- `black_level` 12 (48 at 12 bits; to be measured);
+- `readout_time_ns` 10.29 ms (rows of 19.8 instead of 21.2 us; to be measured);
+- long VC 1 and short VC 0, as #36806 had them. `CAMERA_SHORT_VC_SWAP=1` in camerad's environment swaps them for
+  bring-up.
+
+The short exposure is the table's 64 lines (about 1.27 ms) at gain 1x. In stagger mode `getExposureRegisters` no longer
+copies the long gain into `0x350c/d`, so a short frame's brightness means the same thing on every frame.
+
+**ISP** (`system/camerad/cameras/spectra.cc`):
+- **Acquire:** two `cam_isp_in_port_info` on the same PHY. One is the long VC, which goes to FULL (the pixel path, as
+  before). The other is the short VC, which goes to `RDI_0` as packed RAW10 at 2688x1520.
+- **HFR blob:** it now lists `RDI_0` too. A write master's frame-drop pattern stays 0 (drop every frame) until an HFR
+  config sets it (`cam_vfe_bus_ver2.c`).
+- **Per request:** a second `io_cfg` and its own fence (`sync_objs_short`).
+- **After the FULL wait:** a 5 ms wait on the short fence. The RDI write ends with the readout, before the IFE's processing
+  does.
+- **Short-exposure buffers:** a ring of 4 VisionIPC buffers (`SHORT_BUF_COUNT`), indexed by request id. That's 4 x 5.1 MB
+  per camera, against 18 for a buffer per request. A buffer is reused 200 ms later, long after a reader has finished
+  with it.
+- **No crop:** packed RAW10 can't be cropped by the CSID (the decode format is payload-only, `cam_ife_csid_core.c`), so
+  the frames are full size.
+
+**Delivery.** New VisionIPC streams `VISION_STREAM_NARROW_SHORT = 4` and `VISION_STREAM_WIDE_SHORT = 5` (`cereal/visionstream.h`,
+`cereal/visionipc.py`). They carry the same frame id and SOF/EOF as the processed frame. They're not registered with
+encoderd/loggerd, so nothing is logged. lightd reads them with `starpilot/system/lightd/short_exposure.py`
+(`ShortExposureReader`, `unpack_raw10`, `bin_bayer`; tests in `starpilot/system/tests/test_lightd_short_exposure.py`).
+`hba.py` doesn't use them yet.
+
+**Self-disabling.** manager doesn't restart a native process that exits, so camerad handles failure itself. On any of
+these, it sets `CameraShortExposure` to false, logs why (`staggered HDR failed: ...`), closes every camera and
+`execv`s itself in linear mode, with the same pid:
+- the two-port ISP acquire fails;
+- 3 frames in a row arrive without their short exposure (a request with a missing RDI buf-done stays in the ISP's
+  active list, R5);
+- 10 failed frames in a row;
+- no frame for 5 s;
+- the first-frame sync times out (camera frames misaligned, which modeld would mis-pair).
+
+**Build.** camerad is now in `scripts/pingu_ci.py` `BUILD_ARGS`, so CI rebuilds and commits it. `params_keys.h` is covered
+by `--params`.
+
+### Parked device test (replaces section 8's phase 0-1 commands)
+
+Car parked, at night for phases 1-2, ignition on. Over SSH:
+
+1. **Baseline, param off:** `tmux kill-session -t comma` (or let openpilot keep running for phase 0). Check that
+   `cat /data/params/d/CameraShortExposure` is missing or `0`.
+2. **Bring-up, param on:** `echo -n 1 > /data/params/d/CameraShortExposure`, then
+   `cd /data/openpilot/openpilot/system/camerad && ./camerad`. Watch its output for:
+   - `staggered HDR, long VC 1, short VC 0` for cameras 0 and 1;
+   - `camera N synced on frame_id_offset` for **all three** cameras;
+   - no `staggered HDR failed`. If it fails, the reason is in that line, camerad has already restarted itself in linear
+     mode, and the param is back to 0.
+3. **Check the stream:** in a second shell,
+   `cd /data/openpilot && python3 -m openpilot.starpilot.system.lightd.tools.short_exposure_dump`. Then repeat with
+   `--wide`. Pass:
+   - about 20 Hz with lag 0;
+   - a short mean well below the processed Y mean;
+   - streetlights not clipped (`clipped` near 0 %);
+   - the PNGs in `/data/tmp/short_exposure` show a dark image with lamps as small sharp shapes.
+   If the "short" image is the bright one, stop camerad and rerun it with `CAMERA_SHORT_VC_SWAP=1 ./camerad`.
+4. **Black level:** with the lens covered, the dump's p50 is the black level for `BLACK_LEVEL` (short) and
+   `black_level` (long; compare the processed frame against param off).
+5. **openpilot parity:** with openpilot started normally (`tmux` session back, param on), the road and wide views look
+   normal in the UI, `cabinCameraState` and driver monitoring work, and `modelV2` runs at 20 Hz. Then section 8's phase 2-3
+   image and model comparisons, before any engaged driving with the param on.

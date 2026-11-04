@@ -1,4 +1,5 @@
 #include <cmath>
+#include <cstdlib>
 
 #include "system/camerad/sensors/sensor.h"
 #include <media/msm_camsensor_sdk.h>
@@ -108,10 +109,44 @@ OS04C10::OS04C10() {
   };
 }
 
+void OS04C10::stagger_configure() {
+  // the init table's own values for these registers are replaced where they are, so the PLL is still set first
+  for (const auto &patch : stagger_patch_os04c10) {
+    bool found = false;
+    for (auto &reg : init_reg_array) {
+      if (reg.reg_addr == patch.reg_addr) {
+        reg.reg_data = patch.reg_data;
+        found = true;
+      }
+    }
+    assert(found);
+  }
+
+  stagger = true;
+  long_vc = 1;   // #36806 "use long exposure": the IFE pixel path on VC 1
+  short_vc = 0;
+  if (getenv("CAMERA_SHORT_VC_SWAP")) std::swap(long_vc, short_vc);  // bring-up: if the "short" stream is the bright one
+  short_exposure_lines = 0x40;  // 0x3510-0x3512 in the init table, ~1.3 ms; its gain 0x350c/d stays at the table's 1x
+
+  bits_per_pixel = 10;
+  mipi_format = CAM_FORMAT_MIPI_RAW_10;
+  frame_data_type = CSI_RAW10;
+  frame_stride = frame_width * 10 / 8;
+  black_level = 12;  // 48 at 12 bits. TODO: measure with the lens covered
+  readout_time_ns = 10290000;  // rows are 19.8 instead of 21.2 us. TODO: measure
+}
+
 std::vector<i2c_random_wr_payload> OS04C10::getExposureRegisters(int exposure_time, int new_exp_g, bool dc_gain_enabled) const {
   uint32_t long_time = exposure_time;
   uint32_t real_gain = os04c10_analog_gains_reg[new_exp_g];
 
+  if (stagger) {
+    // the short exposure keeps a fixed time and gain, so its brightness means the same on every frame
+    return {
+      {0x3501, long_time>>8}, {0x3502, long_time&0xFF},
+      {0x3508, real_gain>>8}, {0x3509, real_gain&0xFF},
+    };
+  }
   return {
     {0x3501, long_time>>8}, {0x3502, long_time&0xFF},
     {0x3508, real_gain>>8}, {0x3509, real_gain&0xFF},

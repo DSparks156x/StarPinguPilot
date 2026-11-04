@@ -27,6 +27,15 @@ void CameraBuf::init(SpectraCamera *cam, VisionIpcServer * v, int frame_cnt, Vis
 
   vipc_server->create_buffers_with_sizes(stream_type, VIPC_BUFFER_COUNT, out_img_width, out_img_height, cam->yuv_size, cam->stride, cam->uv_offset);
   LOGD("created %d YUV vipc buffers with size %dx%d", VIPC_BUFFER_COUNT, cam->stride, cam->y_height);
+
+  if (sensor->stagger) {
+    // packed RAW10 short exposures at full resolution, no UV plane (uv_offset 0)
+    const int short_size = sensor->frame_height * sensor->frame_stride;
+    vipc_server->create_buffers_with_sizes(short_stream_type(stream_type), SpectraCamera::SHORT_BUF_COUNT,
+                                           sensor->frame_width, sensor->frame_height, short_size, sensor->frame_stride, 0);
+    LOGD("created %d short exposure vipc buffers, %dx%d stride %d", SpectraCamera::SHORT_BUF_COUNT,
+         sensor->frame_width, sensor->frame_height, sensor->frame_stride);
+  }
 }
 
 CameraBuf::~CameraBuf() {

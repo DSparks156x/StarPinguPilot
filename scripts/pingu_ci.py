@@ -32,6 +32,7 @@ BUILD_ARGS = [
   "openpilot/system/loggerd/encoderd",
   "openpilot/system/loggerd/bootlog",
   "openpilot/selfdrive/pandad/pandad",  # AOL profiles (PQ always-on lateral)
+  "openpilot/system/camerad/camerad",   # staggered HDR short exposures for lightd (CameraShortExposure)
 ]
 
 # Files that count as native: compiled, or generating something compiled.
@@ -59,6 +60,10 @@ COVERED = {
   "openpilot/common/params_c.cc": "--params",
   # loggerd (only loggerd/encoderd/bootlog are built from here)
   "openpilot/system/loggerd/*": "openpilot/system/loggerd/{loggerd,encoderd,bootlog}",
+  # camerad (the only binary built from here)
+  "openpilot/system/camerad/*": "openpilot/system/camerad/camerad",
+  # VisionIPC stream ids: data only. The fork's two short-exposure ids are only used by camerad (rebuilt) and Python.
+  "openpilot/cereal/visionstream.h": "openpilot/system/camerad/camerad",
   # panda firmware (includes the opendbc safety headers)
   "panda/*": "--panda",
   "opendbc_repo/opendbc/safety/*": "--panda",

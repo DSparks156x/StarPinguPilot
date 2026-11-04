@@ -69,6 +69,13 @@ public:
 
   uint32_t readout_time_ns;  // used to recover EOF from SOF
 
+  // Staggered HDR (CameraShortExposure): the sensor sends a second, short exposure of every frame on its own MIPI
+  // virtual channel. The long one goes through the IFE as usual, the short one is dumped raw through RDI_0.
+  bool stagger = false;
+  uint32_t long_vc = 0;
+  uint32_t short_vc = 0;
+  int short_exposure_lines = 0;
+
   // ISP image processing params
   uint32_t black_level;
   std::vector<uint32_t> color_correct_matrix;  // 3x3
@@ -110,6 +117,7 @@ public:
 class OS04C10 : public SensorInfo {
 public:
   OS04C10();
+  void stagger_configure();
   std::vector<i2c_random_wr_payload> getExposureRegisters(int exposure_time, int new_exp_g, bool dc_gain_enabled) const override;
   float getExposureScore(float desired_ev, int exp_t, int exp_g_idx, float exp_gain, int gain_idx) const override;
   int getSlaveAddress(int port) const override;

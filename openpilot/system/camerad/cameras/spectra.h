@@ -93,6 +93,7 @@ public:
   int cdm_iommu = -1;
   int icp_device_iommu = -1;
   MemoryManager mem_mgr;
+  bool short_exposure = false;  // CameraShortExposure, read once at start
 };
 
 class SpectraBuf {
@@ -205,6 +206,20 @@ public:
   int buf_handle_raw[MAX_IFE_BUFS] = {};
   int sync_objs_ife[MAX_IFE_BUFS] = {};
   int sync_objs_bps[MAX_IFE_BUFS] = {};
+
+  // staggered HDR short exposures (sensor->stagger): RDI_0 writes them into a small ring of VisionIPC buffers, reused
+  // every SHORT_BUF_COUNT requests (200 ms, long after a reader is done with one)
+  static constexpr int SHORT_BUF_COUNT = 4;
+  int buf_handle_short[SHORT_BUF_COUNT] = {};
+  int sync_objs_short[MAX_IFE_BUFS] = {};
+  bool short_ready = false;      // the current frame's short exposure has landed
+  int short_misses = 0;          // consecutive frames whose short exposure didn't
+  int frame_failures = 0;        // consecutive failed frames while in stagger mode
+  uint64_t last_good_frame_ns = 0;
+  void sendShortFrame();
+  void shortExposureFailed(const char *why);
+  // set when stagger mode failed: camerad tears down and restarts itself with CameraShortExposure off
+  inline static bool short_exposure_fallback = false;
   uint64_t last_valid_request_id = 0;
   uint64_t last_requeue_ts = 0;
   uint64_t last_valid_ife_frame_id = 0;
@@ -227,6 +242,7 @@ private:
   };
   inline static std::map<int, SyncData> camera_sync_data;
   inline static bool first_frame_synced = false;
+  inline static bool first_frame_sync_timed_out = false;
 
   // a mode for stressing edge cases: realignment, sync failures, etc.
   inline bool stress_test(std::string log) {

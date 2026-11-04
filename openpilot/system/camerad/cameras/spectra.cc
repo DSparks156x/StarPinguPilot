@@ -12,6 +12,7 @@
 #include "media/cam_isp_ife.h"
 #include "media/cam_sync.h"
 
+#include "common/params.h"
 #include "common/util.h"
 #include "common/swaglog.h"
 #include "system/camerad/cameras/ife.h"
@@ -231,6 +232,9 @@ void SpectraMaster::init() {
   LOGD("req mgr subscribe: %d", ret);
 
   mem_mgr.init(video0_fd);
+
+  short_exposure = Params().getBool("CameraShortExposure");
+  if (short_exposure) LOGW("CameraShortExposure: road cameras in staggered HDR");
 }
 
 // *** SpectraCamera ***
@@ -297,6 +301,11 @@ void SpectraCamera::camera_open(VisionIpcServer *v) {
 
   open = true;
   configISP();
+  if (short_exposure_fallback) {
+    // nothing past the ISP acquire exists to tear down; the fds go with this camera
+    open = false;
+    return;
+  }
   if (cc.output_type == ISP_BPS_PROCESSED) configICP();
   configCSIPHY();
   linkDevices();
@@ -304,6 +313,7 @@ void SpectraCamera::camera_open(VisionIpcServer *v) {
   LOGD("camera init %d", cc.camera_num);
   buf.init(this, v, ife_buf_depth, cc.stream_type);
   camera_map_bufs();
+  last_good_frame_ns = nanos_since_boot();
   clearAndRequeue(1);
 }
 
@@ -767,10 +777,11 @@ void SpectraCamera::config_ife(int idx, int request_id, bool init) {
     Handles initial + per-frame IFE config.
     * IFE = Image Front End
   */
+  const bool stagger = sensor->stagger && cc.output_type == ISP_IFE_PROCESSED;  // + the short exposure on RDI_0
   int size = sizeof(struct cam_packet) + sizeof(struct cam_cmd_buf_desc)*2;
   size += sizeof(struct cam_patch_desc)*10;
   if (!init) {
-    size += sizeof(struct cam_buf_io_cfg);
+    size += sizeof(struct cam_buf_io_cfg) * (stagger ? 2 : 1);
   }
 
   uint32_t cam_packet_handle = 0;
@@ -825,61 +836,99 @@ void SpectraCamera::config_ife(int idx, int request_id, bool init) {
       uint32_t type_2;
       cam_isp_bw_config bw;
       struct cam_isp_bw_vote extra_rdi_vote[6];
-    } __attribute__((packed)) tmp;
-    memset(&tmp, 0, sizeof(tmp));
+    } __attribute__((packed));
+    // staggered: the HFR blob lists RDI_0 too. A write master's frame-drop pattern is 0 (drop every frame) until it does.
+    struct isp_packet_stagger {
+      uint32_t type_0;
+      cam_isp_resource_hfr_config resource_hfr;
+      cam_isp_port_hfr_config short_hfr;
 
-    tmp.type_0 = CAM_ISP_GENERIC_BLOB_TYPE_HFR_CONFIG;
-    tmp.type_0 |= sizeof(cam_isp_resource_hfr_config) << 8;
-    static_assert(sizeof(cam_isp_resource_hfr_config) == 0x20);
-    tmp.resource_hfr = {
-      .num_ports = 1,
-      .port_hfr_config[0] = {
-        .resource_type = static_cast<uint32_t>(is_raw ? CAM_ISP_IFE_OUT_RES_RDI_0 : CAM_ISP_IFE_OUT_RES_FULL),
+      uint32_t type_1;
+      cam_isp_clock_config clock;
+      uint64_t extra_rdi_hz[3];
+
+      uint32_t type_2;
+      cam_isp_bw_config bw;
+      struct cam_isp_bw_vote extra_rdi_vote[6];
+    } __attribute__((packed));
+    static_assert(offsetof(struct isp_packet, type_2) == 0x60);
+    // short_hfr must read as port_hfr_config[1]
+    static_assert(offsetof(struct isp_packet_stagger, short_hfr) ==
+                  offsetof(struct isp_packet_stagger, resource_hfr) + sizeof(cam_isp_resource_hfr_config));
+
+    auto fill_blobs = [&](auto &tmp, uint32_t hfr_size) {
+      memset(&tmp, 0, sizeof(tmp));
+
+      tmp.type_0 = CAM_ISP_GENERIC_BLOB_TYPE_HFR_CONFIG;
+      tmp.type_0 |= hfr_size << 8;
+      static_assert(sizeof(cam_isp_resource_hfr_config) == 0x20);
+      tmp.resource_hfr = {
+        .num_ports = 1,
+        .port_hfr_config[0] = {
+          .resource_type = static_cast<uint32_t>(is_raw ? CAM_ISP_IFE_OUT_RES_RDI_0 : CAM_ISP_IFE_OUT_RES_FULL),
+          .subsample_pattern = 1,
+          .subsample_period = 0,
+          .framedrop_pattern = 1,
+          .framedrop_period = 0,
+        }
+      };
+
+      tmp.type_1 = CAM_ISP_GENERIC_BLOB_TYPE_CLOCK_CONFIG;
+      tmp.type_1 |= (sizeof(cam_isp_clock_config) + sizeof(tmp.extra_rdi_hz)) << 8;
+      static_assert((sizeof(cam_isp_clock_config) + sizeof(tmp.extra_rdi_hz)) == 0x38);
+      tmp.clock = {
+        .usage_type = 1, // dual mode
+        .num_rdi = 4,
+        .left_pix_hz = 404000000,
+        .right_pix_hz = 404000000,
+        .rdi_hz[0] = 404000000,
+      };
+
+      tmp.type_2 = CAM_ISP_GENERIC_BLOB_TYPE_BW_CONFIG;
+      tmp.type_2 |= (sizeof(cam_isp_bw_config) + sizeof(tmp.extra_rdi_vote)) << 8;
+      static_assert((sizeof(cam_isp_bw_config) + sizeof(tmp.extra_rdi_vote)) == 0xe0);
+      tmp.bw = {
+        .usage_type = 1, // dual mode
+        .num_rdi = 4,
+        .left_pix_vote = {
+          .resource_id = 0,
+          .cam_bw_bps = 450000000,
+          .ext_bw_bps = 450000000,
+        },
+        .rdi_vote[0] = {
+          .resource_id = 0,
+          .cam_bw_bps = 8706200000,
+          .ext_bw_bps = 8706200000,
+        },
+      };
+    };
+    auto submit_blobs = [&](const void *tmp, uint32_t tmp_size, uint32_t bw_offset) {
+      buf_desc[1].size = tmp_size;
+      buf_desc[1].offset = !init ? bw_offset : 0;
+      buf_desc[1].length = buf_desc[1].size - buf_desc[1].offset;
+      buf_desc[1].type = CAM_CMD_BUF_GENERIC;
+      buf_desc[1].meta_data = CAM_ISP_PACKET_META_GENERIC_BLOB_COMMON;
+      auto buf2 = m->mem_mgr.alloc<uint32_t>(buf_desc[1].size, (uint32_t*)&buf_desc[1].mem_handle);
+      memcpy(buf2.get(), tmp, tmp_size);
+    };
+
+    if (stagger) {
+      isp_packet_stagger tmp;
+      fill_blobs(tmp, sizeof(cam_isp_resource_hfr_config) + sizeof(cam_isp_port_hfr_config));
+      tmp.resource_hfr.num_ports = 2;
+      tmp.short_hfr = {
+        .resource_type = CAM_ISP_IFE_OUT_RES_RDI_0,
         .subsample_pattern = 1,
         .subsample_period = 0,
         .framedrop_pattern = 1,
         .framedrop_period = 0,
-      }
-    };
-
-    tmp.type_1 = CAM_ISP_GENERIC_BLOB_TYPE_CLOCK_CONFIG;
-    tmp.type_1 |= (sizeof(cam_isp_clock_config) + sizeof(tmp.extra_rdi_hz)) << 8;
-    static_assert((sizeof(cam_isp_clock_config) + sizeof(tmp.extra_rdi_hz)) == 0x38);
-    tmp.clock = {
-      .usage_type = 1, // dual mode
-      .num_rdi = 4,
-      .left_pix_hz = 404000000,
-      .right_pix_hz = 404000000,
-      .rdi_hz[0] = 404000000,
-    };
-
-    tmp.type_2 = CAM_ISP_GENERIC_BLOB_TYPE_BW_CONFIG;
-    tmp.type_2 |= (sizeof(cam_isp_bw_config) + sizeof(tmp.extra_rdi_vote)) << 8;
-    static_assert((sizeof(cam_isp_bw_config) + sizeof(tmp.extra_rdi_vote)) == 0xe0);
-    tmp.bw = {
-      .usage_type = 1, // dual mode
-      .num_rdi = 4,
-      .left_pix_vote = {
-        .resource_id = 0,
-        .cam_bw_bps = 450000000,
-        .ext_bw_bps = 450000000,
-      },
-      .rdi_vote[0] = {
-        .resource_id = 0,
-        .cam_bw_bps = 8706200000,
-        .ext_bw_bps = 8706200000,
-      },
-    };
-
-    static_assert(offsetof(struct isp_packet, type_2) == 0x60);
-
-    buf_desc[1].size = sizeof(tmp);
-    buf_desc[1].offset = !init ? 0x60 : 0;
-    buf_desc[1].length = buf_desc[1].size - buf_desc[1].offset;
-    buf_desc[1].type = CAM_CMD_BUF_GENERIC;
-    buf_desc[1].meta_data = CAM_ISP_PACKET_META_GENERIC_BLOB_COMMON;
-    auto buf2 = m->mem_mgr.alloc<uint32_t>(buf_desc[1].size, (uint32_t*)&buf_desc[1].mem_handle);
-    memcpy(buf2.get(), &tmp, sizeof(tmp));
+      };
+      submit_blobs(&tmp, sizeof(tmp), offsetof(struct isp_packet_stagger, type_2));
+    } else {
+      isp_packet tmp;
+      fill_blobs(tmp, sizeof(cam_isp_resource_hfr_config));
+      submit_blobs(&tmp, sizeof(tmp), 0x60);
+    }
   }
 
   // *** io config ***
@@ -932,6 +981,27 @@ void SpectraCamera::config_ife(int idx, int request_id, bool init) {
       io_cfg[0].subsample_pattern = 0x1;
       io_cfg[0].framedrop_pattern = 0x1;
     }
+
+    if (stagger) {
+      // the short exposure, packed RAW10, into the ring buffer for this request
+      pkt->num_io_configs = 2;
+      io_cfg[1].mem_handle[0] = buf_handle_short[(uint32_t)request_id % SHORT_BUF_COUNT];
+      io_cfg[1].planes[0] = (struct cam_plane_cfg){
+        .width = sensor->frame_width,
+        .height = sensor->frame_height,
+        .plane_stride = sensor->frame_stride,
+        .slice_height = sensor->frame_height,
+      };
+      io_cfg[1].format = sensor->mipi_format;
+      io_cfg[1].color_space = CAM_COLOR_SPACE_BASE;
+      io_cfg[1].color_pattern = 0x5;
+      io_cfg[1].bpp = 0xa;
+      io_cfg[1].resource_type = CAM_ISP_IFE_OUT_RES_RDI_0;
+      io_cfg[1].fence = sync_objs_short[idx];
+      io_cfg[1].direction = CAM_BUF_OUTPUT;
+      io_cfg[1].subsample_pattern = 0x1;
+      io_cfg[1].framedrop_pattern = 0x1;
+    }
   }
 
   // *** patches ***
@@ -983,6 +1053,16 @@ void SpectraCamera::enqueue_frame(uint64_t request_id) {
     }
   }
 
+  if (sensor->stagger) {
+    assert(sync_objs_short[i] == 0);
+    ret = do_sync_control(m->cam_sync_fd, CAM_SYNC_CREATE, &sync_create, sizeof(sync_create));
+    if (ret != 0) {
+      LOGE("failed to create short exposure fence: %d %d", ret, sync_create.sync_obj);
+    } else {
+      sync_objs_short[i] = sync_create.sync_obj;
+    }
+  }
+
   // schedule request with camera request manager
   struct cam_req_mgr_sched_request req_mgr_sched_request = {0};
   req_mgr_sched_request.session_hdl = session_handle;
@@ -1016,6 +1096,7 @@ void SpectraCamera::destroySyncObjectAt(int index) {
 
   destroy_sync_obj(m->cam_sync_fd, sync_objs_ife[index]);
   destroy_sync_obj(m->cam_sync_fd, sync_objs_bps[index]);
+  destroy_sync_obj(m->cam_sync_fd, sync_objs_short[index]);
 }
 
 void SpectraCamera::camera_map_bufs() {
@@ -1049,6 +1130,21 @@ void SpectraCamera::camera_map_bufs() {
       buf_handle_yuv[i] = mem_mgr_map_cmd.out.buf_handle;
     }
   }
+
+  if (sensor->stagger) {
+    for (int i = 0; i < SHORT_BUF_COUNT; i++) {
+      struct cam_mem_mgr_map_cmd mem_mgr_map_cmd = {0};
+      mem_mgr_map_cmd.flags = CAM_MEM_FLAG_HW_READ_WRITE;
+      mem_mgr_map_cmd.mmu_hdls[0] = m->device_iommu;
+      mem_mgr_map_cmd.num_hdl = 1;
+      VisionBuf *vb = buf.vipc_server->get_buffer(short_stream_type(cc.stream_type), i);
+      mem_mgr_map_cmd.fd = vb->fd;
+      ret = do_cam_control(m->video0_fd, CAM_REQ_MGR_MAP_BUF, &mem_mgr_map_cmd, sizeof(mem_mgr_map_cmd));
+      assert(ret == 0);
+      LOGD("map short buf req: (fd: %d) 0x%x %d", vb->fd, mem_mgr_map_cmd.out.buf_handle, ret);
+      buf_handle_short[i] = mem_mgr_map_cmd.out.buf_handle;
+    }
+  }
 }
 
 bool SpectraCamera::openSensor() {
@@ -1072,6 +1168,15 @@ bool SpectraCamera::openSensor() {
     return false;
   }
   LOGD("-- Probing sensor %d success", cc.camera_num);
+
+  // the road cameras only: the cabin camera stays linear RAW12 for the BPS and the driver monitoring model
+  if (m->short_exposure && cc.output_type == ISP_IFE_PROCESSED && sensor->image_sensor == cereal::FrameData::ImageSensor::OS04C10) {
+    auto s = std::make_unique<OS04C10>();
+    s->stagger_configure();
+    sensor = std::move(s);
+    LOGW("camera %d: staggered HDR, long VC %d, short VC %d, short exposure %d lines", cc.camera_num,
+         sensor->long_vc, sensor->short_vc, sensor->short_exposure_lines);
+  }
 
   // create session
   struct cam_req_mgr_session_info session_info = {};
@@ -1101,7 +1206,7 @@ void SpectraCamera::configISP() {
     .lane_num = 4,
     .lane_cfg = 0x3210,
 
-    .vc = 0x0,
+    .vc = sensor->long_vc,  // 0 unless staggered
     .dt = sensor->frame_data_type,
     .format = sensor->mipi_format,
 
@@ -1146,14 +1251,41 @@ void SpectraCamera::configISP() {
     in_port_info.data[0].format = sensor->mipi_format;
   }
 
-  struct cam_isp_resource isp_resource = {
-    .resource_id = CAM_ISP_RES_ID_PORT,
-    .handle_type = CAM_HANDLE_USER_POINTER,
-    .res_hdl = (uint64_t)&in_port_info,
-    .length = sizeof(in_port_info),
+  // staggered: the short exposure's virtual channel is a second input on the same PHY, written raw by RDI_0. The kernel
+  // gives it its own CID and RDI path on the CSID that already has the pixel path.
+  struct cam_isp_in_port_info short_port_info = in_port_info;
+  short_port_info.vc = sensor->short_vc;
+  short_port_info.line_start = 0;
+  short_port_info.line_stop = sensor->frame_height - 1;
+  short_port_info.height = sensor->frame_height;
+  short_port_info.data[0] = (struct cam_isp_out_port_info){
+    .res_type = CAM_ISP_IFE_OUT_RES_RDI_0,
+    .format = sensor->mipi_format,
+    .width = sensor->frame_width,
+    .height = sensor->frame_height,
+    .comp_grp_id = 0x0, .split_point = 0x0, .secure_mode = 0x0,
   };
 
-  auto isp_dev_handle_ = device_acquire(m->isp_fd, session_handle, &isp_resource);
+  struct cam_isp_resource isp_resources[2] = {
+    {
+      .resource_id = CAM_ISP_RES_ID_PORT,
+      .handle_type = CAM_HANDLE_USER_POINTER,
+      .res_hdl = (uint64_t)&in_port_info,
+      .length = sizeof(in_port_info),
+    },
+    {
+      .resource_id = CAM_ISP_RES_ID_PORT,
+      .handle_type = CAM_HANDLE_USER_POINTER,
+      .res_hdl = (uint64_t)&short_port_info,
+      .length = sizeof(short_port_info),
+    },
+  };
+
+  auto isp_dev_handle_ = device_acquire(m->isp_fd, session_handle, isp_resources, sensor->stagger ? 2 : 1);
+  if (!isp_dev_handle_ && sensor->stagger) {
+    shortExposureFailed("ISP acquire with the short exposure's RDI path");
+    return;
+  }
   assert(isp_dev_handle_);
   isp_dev_handle = *isp_dev_handle_;
   LOGD("acquire isp dev");
@@ -1403,6 +1535,11 @@ void SpectraCamera::camera_close() {
         release(m->video0_fd, buf_handle_yuv[i]);
       }
     }
+    for (int i = 0; i < SHORT_BUF_COUNT; i++) {
+      if (buf_handle_short[i]) {
+        release(m->video0_fd, buf_handle_short[i]);
+      }
+    }
     LOGD("released buffers");
   }
 
@@ -1451,8 +1588,25 @@ bool SpectraCamera::handle_camera_event(const cam_req_mgr_message *event_data) {
   if (!waitForFrameReady(request_id)) {
     // Reset queue on sync failure to prevent frame tearing
     LOGE("camera %d sync failure %ld %ld ", cc.camera_num, request_id, ife_frame_id);
+    if (sensor->stagger && ++frame_failures >= 10) {
+      shortExposureFailed("10 failed frames in a row");
+    }
     clearAndRequeue(request_id + 1);
     return false;
+  }
+
+  if (sensor->stagger) {
+    if (first_frame_sync_timed_out) {
+      // stagger timing that drifts from the cabin camera's; modeld pairs road and wide frames by id
+      shortExposureFailed("the cameras' first frames never lined up");
+    }
+    frame_failures = 0;
+    last_good_frame_ns = nanos_since_boot();
+    // a request whose RDI write never completes stays in the ISP's active list, so don't wait long to give up on it
+    short_misses = short_ready ? 0 : short_misses + 1;
+    if (short_misses >= 3) {
+      shortExposureFailed("3 frames in a row without their short exposure");
+    }
   }
 
   int buf_idx = request_id % ife_buf_depth;
@@ -1532,7 +1686,32 @@ bool SpectraCamera::waitForFrameReady(uint64_t request_id) {
     success = waitForSync(sync_objs_bps[buf_idx], 50, "BPS sync");
   }
 
+  short_ready = false;
+  if (success && sync_objs_short[buf_idx]) {
+    // RDI_0's write ends with the readout, before the IFE's processing does: if it isn't done now, it isn't coming
+    short_ready = waitForSync(sync_objs_short[buf_idx], 5, "short exposure sync");
+  }
+
   return success;
+}
+
+void SpectraCamera::sendShortFrame() {
+  const FrameMetadata &meta = buf.cur_frame_data;
+  VisionBuf *b = buf.vipc_server->get_buffer(short_stream_type(cc.stream_type), meta.request_id % SHORT_BUF_COUNT);
+  VisionIpcBufExtra extra = {
+    meta.frame_id,
+    meta.timestamp_sof,
+    meta.timestamp_eof,
+  };
+  b->set_frame_id(meta.frame_id);
+  buf.vipc_server->send(b, &extra);
+}
+
+void SpectraCamera::shortExposureFailed(const char *why) {
+  if (short_exposure_fallback) return;
+  LOGE("camera %d: staggered HDR failed: %s. Turning CameraShortExposure off and restarting camerad", cc.camera_num, why);
+  Params().putBool("CameraShortExposure", false);
+  short_exposure_fallback = true;
 }
 
 bool SpectraCamera::processFrame(int buf_idx, uint64_t request_id, uint64_t ife_frame_id, uint64_t timestamp) {
@@ -1595,6 +1774,7 @@ bool SpectraCamera::syncFirstFrame(int camera_id, uint64_t request_id, uint64_t 
   if (ife_frame_id > 40) {
     LOGE("camera first frame sync timed out");
     first_frame_synced = true;
+    first_frame_sync_timed_out = true;
   }
 
   return false;

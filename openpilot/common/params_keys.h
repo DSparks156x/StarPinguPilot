@@ -395,6 +395,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"Version", {PERSISTENT, STRING}},
 
     // StarPinguPilot
+    {"CameraShortExposure", {PERSISTENT, BOOL, "0"}},
     {"ShowTamagotchi", {PERSISTENT, BOOL, "0"}},
     {"VolkswagenHCADeltaRateDown", {PERSISTENT, INT, "0"}},
     {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0"}},

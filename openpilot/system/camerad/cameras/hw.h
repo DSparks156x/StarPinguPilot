@@ -71,3 +71,8 @@ const CameraConfig CABIN_CAMERA_CONFIG = {
 };
 
 const CameraConfig ALL_CAMERA_CONFIGS[] = {WIDE_ROAD_CAMERA_CONFIG, NARROW_ROAD_CAMERA_CONFIG, CABIN_CAMERA_CONFIG};
+
+// StarPinguPilot: where a road camera's raw short exposures go in staggered HDR mode (CameraShortExposure)
+inline VisionStreamType short_stream_type(VisionStreamType road) {
+  return road == VISION_STREAM_WIDE_ROAD ? VISION_STREAM_WIDE_SHORT : VISION_STREAM_NARROW_SHORT;
+}

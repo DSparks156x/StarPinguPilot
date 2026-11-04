@@ -231,6 +231,7 @@ void CameraState::set_camera_exposure(float grey_frac) {
 
 void CameraState::sendState() {
   camera.buf.sendFrameToVipc();
+  if (camera.short_ready) camera.sendShortFrame();
 
   MessageBuilder msg;
   auto framed = (msg.initEvent().*camera.cc.init_camera_state)();
@@ -262,7 +263,7 @@ void CameraState::sendState() {
   pm->send(camera.cc.publish_name, msg);
 }
 
-void camerad_thread() {
+bool camerad_thread() {
   // TODO: centralize enabled handling
 
   VisionIpcServer v("camerad");
@@ -277,6 +278,7 @@ void camerad_thread() {
     auto cam = std::make_unique<CameraState>(&m, config);
     cam->init(&v);
     cams.emplace_back(std::move(cam));
+    if (SpectraCamera::short_exposure_fallback) return true;
   }
 
   v.start_listener();
@@ -288,6 +290,14 @@ void camerad_thread() {
   // poll events
   LOG("-- Dequeueing Video events");
   while (!do_exit) {
+    if (SpectraCamera::short_exposure_fallback) return true;
+    for (auto &cam : cams) {
+      // a stagger mode the sensor or CSID can't do may not produce a single SOF
+      if (cam->camera.enabled && cam->camera.sensor && cam->camera.sensor->stagger &&
+          nanos_since_boot() - cam->camera.last_good_frame_ns > 5000000000ULL) {
+        cam->camera.shortExposureFailed("no frame for 5 s");
+      }
+    }
     restore_camera_affinity();
     struct pollfd fds[1] = {{.fd = m.video0_fd, .events = POLLPRI}};
     int ret = poll(fds, std::size(fds), 1000);
@@ -325,4 +335,5 @@ void camerad_thread() {
       LOGE("VIDIOC_DQEVENT failed, errno=%d", errno);
     }
   }
+  return false;
 }

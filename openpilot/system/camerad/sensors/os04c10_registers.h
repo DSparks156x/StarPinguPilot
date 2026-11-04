@@ -330,3 +330,17 @@ const struct i2c_random_wr_payload init_array_os04c10[] = {
   {0x5104, 0x08}, {0x5105, 0xd6},
   {0x5144, 0x08}, {0x5145, 0xd6},
 };
+
+// Staggered HDR: the linear table above with these values patched in place (write order kept). Two exposures per frame,
+// each on its own MIPI virtual channel, RAW10. From commaai/openpilot#36806 (draft, "works with vc, 20fps and staggered
+// hdr"), whose full table is ours plus exactly these 15 changes. The meanings are guesses until we have the datasheet.
+const struct i2c_random_wr_payload stagger_patch_os04c10[] = {
+  {0x0301, 0x84}, {0x0305, 0x61}, {0x0325, 0x7a},  // PLL: half the sclk, so each row period carries a long and a short row
+  {0x3022, 0x01},
+  {0x3621, 0x90},
+  {0x370a, 0x00}, {0x3748, 0x00}, {0x374a, 0x00}, {0x374c, 0x00}, {0x374e, 0x00},  // analog timing
+  {0x380c, 0x04}, {0x380d, 0x2e},  // HTS 1070
+  {0x380f, 0xdb},                  // VTS 2523 (0x380e stays 0x09): 50 ms at 19.8 us per row
+  {0x3821, 0x04},                  // stagger HDR on
+  {0x4090, 0x14},                  // BLC
+};
