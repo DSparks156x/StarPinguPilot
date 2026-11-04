@@ -31,6 +31,7 @@ BUILD_ARGS = [
   "openpilot/system/loggerd/loggerd",
   "openpilot/system/loggerd/encoderd",
   "openpilot/system/loggerd/bootlog",
+  "openpilot/selfdrive/pandad/pandad",  # AOL profiles (PQ always-on lateral)
 ]
 
 # Files that count as native: compiled, or generating something compiled.
@@ -49,6 +50,10 @@ COVERED = {
   "openpilot/cereal/*.capnp": "--cereal (libcereal.a)",
   "openpilot/cereal/gen/*": "--cereal (regenerated from the schema)",
   "openpilot/cereal/SConscript": "--cereal",
+  # pandad: AOL safety profiles. Only pandad.cc's profile list and the VW profile header; other pandad code stays upstream's.
+  "openpilot/selfdrive/pandad/pandad.cc": "openpilot/selfdrive/pandad/pandad",
+  "openpilot/starpilot/car/volkswagen/aol_policy.h": "openpilot/selfdrive/pandad/pandad (tests also include it)",
+  "openpilot/selfdrive/pandad/tests/*": "not shipped",
   # params
   "openpilot/common/params_keys.h": "--params",
   "openpilot/common/params_c.cc": "--params",

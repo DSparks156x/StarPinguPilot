@@ -223,6 +223,7 @@ class VolkswagenSafetyFlags(IntFlag):
   PQ_NO_EXT_CAN = 4
   # bits 3-5 / 6-8: PQ HCA rate up / down, see hca_tuning.py
   PQ_LIGHT_TX = 512  # bit 9: allow mFLA_1 (0x65A) camera lights on bus 1, see fla.py
+  PQ_AOL = 1024  # bit 10: always-on lateral with alternativeExperience 32, see safety/modes/volkswagen_pq_aol.h
 
 
 class VolkswagenFlags(IntFlag):

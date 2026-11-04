@@ -2,12 +2,14 @@ from opendbc.car import structs
 from opendbc.car.volkswagen.stock_aol import qualified as stock_qualified, safety_config as aol_safety_config, AOL_WORD, MANUAL_WORD, DIRECT_WORD, AOL_WORDS
 from opendbc.car.volkswagen.long_aol import qualified as long_qualified, WORDS as LONG_WORDS
 from opendbc.car.volkswagen.meb_modes import qualified as meb_qualified, profile_word as meb_word, base_word as meb_base_word, AOL_WORDS as MEB_WORDS
+from opendbc.car.volkswagen.pq_aol import qualified as pq_qualified, AOL_WORD as PQ_AOL_WORD, word_supported as pq_word_supported  # StarPinguPilot
 from openpilot.starpilot.aol.intent import AolCardIntent, AOL_TOGGLE, ButtonType
 from openpilot.starpilot.aol.policy import AolVehiclePolicy
 
 
 def qualified(cp, *, marked_only=False):
-  return stock_qualified(cp, marked_only=marked_only) or long_qualified(cp, marked_only=marked_only) or meb_qualified(cp, marked_only=marked_only)
+  return (stock_qualified(cp, marked_only=marked_only) or long_qualified(cp, marked_only=marked_only) or meb_qualified(cp, marked_only=marked_only) or
+          pq_qualified(cp, marked_only=marked_only))
 
 
 def temporary_restriction(cp, state):
@@ -24,6 +26,8 @@ def policy_for(cp):
   word |= DIRECT_WORD if cp.transmissionType == structs.CarParams.TransmissionType.direct else 0
   if meb_qualified(cp):
     word = meb_word(cp) & ~meb_base_word(cp)
+  if pq_qualified(cp):  # StarPinguPilot
+    word = PQ_AOL_WORD
   return AolVehiclePolicy(intent_supported=True, settings_supported=True, runtime_supported=True,
                          normal_runtime_supported=True, ordinary_axis_ack_required=qualified(cp, marked_only=True),
                          explicit_latch=True, lkas_button_supported=False, safety_param_addition=word,
@@ -32,7 +36,8 @@ def policy_for(cp):
 
 def native_profile_supported(model, param):
   return (model == int(structs.CarParams.SafetyModel.volkswagen) and param in AOL_WORDS | LONG_WORDS or
-          model == int(structs.CarParams.SafetyModel.volkswagenMeb) and param in MEB_WORDS)
+          model == int(structs.CarParams.SafetyModel.volkswagenMeb) and param in MEB_WORDS or
+          model == int(structs.CarParams.SafetyModel.volkswagenPq) and pq_word_supported(param))  # StarPinguPilot
 
 
 def native_accepts_cp(cp, model, param):
@@ -59,7 +64,7 @@ class VolkswagenStockCardIntent(AolCardIntent):
     self.physical_eps_pause = False
     self.eps_recovery_ns = 0
     self.main_seen = False
-    self.main_startup_pending = True
+    self.main_startup_pending = not pq_qualified(cp)  # StarPinguPilot: PQ needs main seen off first
     self.main_available = False
     self.main_neutral = False
     self.main_pulse = False

@@ -9,8 +9,8 @@
 #   change therefore reaches the car only if this workflow rebuilds the binary that contains it and commits it.
 #
 # - A full build is slow, so the default build is an explicit list of targets: BUILD_ARGS in scripts/pingu_ci.py
-#   (params, panda firmware, cereal libs/services.h, openpilot/system/loggerd/{loggerd,encoderd,bootlog}). Everything else
-#   (pandad, camerad, modeld/controls/locationd libs, msgq, ...) stays as committed.
+#   (params, panda firmware, cereal libs/services.h, loggerd/{loggerd,encoderd,bootlog}, pandad). Everything else
+#   (camerad, modeld/controls/locationd libs, msgq, ...) stays as committed.
 #
 # - The guard step fails the run if native sources changed since the last build-bot commit that the list doesn't
 #   cover (COVERED/IGNORED in scripts/pingu_ci.py: a static path list, checked in milliseconds, before any build).

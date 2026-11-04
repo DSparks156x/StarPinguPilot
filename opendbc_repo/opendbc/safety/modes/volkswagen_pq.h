@@ -15,6 +15,8 @@
 #define MSG_LDW_1               0x5BEU   // TX by OP, Lane line recognition and text alerts
 #define MSG_MFLA_1              0x65AU   // TX by OP (StarPinguPilot), HBA camera frame carrying camera lights to the J519
 
+#include "opendbc/safety/modes/volkswagen_pq_aol.h"  // StarPinguPilot
+
 static uint32_t volkswagen_pq_get_checksum(const CANPacket_t *msg) {
   return (uint32_t)msg->data[(msg->addr == MSG_MOTOR_5) ? 7 : 0];
 }
@@ -66,9 +68,9 @@ static int volkswagen_pq_max_rate_up = VOLKSWAGEN_PQ_STOCK_RATE_UP;
 static int volkswagen_pq_max_rate_down = VOLKSWAGEN_PQ_STOCK_RATE_DOWN;
 
 static int volkswagen_pq_hca_rate(uint16_t param, uint16_t shift, int stock_rate) {
-  static const int VOLKSWAGEN_PQ_HCA_DELTA_RATES[] = {10, 30, 50, 150, 300};
   int rate = stock_rate;
 #ifdef ALLOW_DEBUG
+  static const int VOLKSWAGEN_PQ_HCA_DELTA_RATES[] = {10, 30, 50, 150, 300};
   int idx = (int)((param >> shift) & 0x7U);
   if ((idx >= 1) && (idx <= 5)) {
     rate = VOLKSWAGEN_PQ_HCA_DELTA_RATES[idx - 1];
@@ -153,6 +155,8 @@ static safety_config volkswagen_pq_init(uint16_t param) {
   volkswagen_pq_max_rate_up = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_UP_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_UP);
   volkswagen_pq_max_rate_down = volkswagen_pq_hca_rate(param, VOLKSWAGEN_PQ_RATE_DOWN_SHIFT, VOLKSWAGEN_PQ_STOCK_RATE_DOWN);
 
+  vw_pq_aol_init(param);  // StarPinguPilot
+
   safety_config ret;
   if ((volkswagen_pq_bus == 1U) && GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_LIGHT_TX)) {
     ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks_bus1, VOLKSWAGEN_PQ_LONG_TX_MSGS_BUS1_LIGHT) : \
@@ -163,6 +167,10 @@ static safety_config volkswagen_pq_init(uint16_t param) {
   } else {
     ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
                                     BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
+  }
+  if (vw_pq_aol_config_invalid(param)) {  // StarPinguPilot
+    ret.tx_msgs = NULL;
+    ret.tx_msgs_len = 0;
   }
   return ret;
 }
@@ -233,6 +241,13 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
   if (msg_matches(msg, MSG_MOTOR_2, volkswagen_pq_bus)) {
     brake_pressed = (msg->data[2] & 0x1U);
   }
+
+  vw_pq_aol_rx(msg, volkswagen_pq_bus);  // StarPinguPilot
+}
+
+// StarPinguPilot: AOL sources outside the rx checks (Lenkhilfe_2 EPS status, Gate_Komf_1 reverse light)
+static void volkswagen_pq_optional_rx(const CANPacket_t *msg) {
+  vw_pq_aol_rx(msg, volkswagen_pq_bus);
 }
 
 static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
@@ -318,4 +333,5 @@ const safety_hooks volkswagen_pq_hooks = {
   .get_counter = volkswagen_pq_get_counter,
   .get_checksum = volkswagen_pq_get_checksum,
   .compute_checksum = volkswagen_pq_compute_checksum,
+  .optional_rx = volkswagen_pq_optional_rx,  // StarPinguPilot
 };
