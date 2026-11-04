@@ -110,7 +110,7 @@ static void tesla_screen_rx(const CANPacket_t *msg, bool autopark) {
       const unsigned int state = (msg->data[1] >> 4U) & 7U;
       const bool cruise = ((state == 2U) || (state == 3U) || (state == 4U) || (state == 6U) || (state == 7U)) && !tesla_screen_autopark;
       const bool main_available = ((state == 1U) || cruise) && !tesla_screen_autopark;
-      if ((cruise && !tesla_screen_cruise) || (main_available && !tesla_screen_main)) {
+      if (cruise && !tesla_screen_cruise) {
         tesla_screen_override = 0;
       }
       if (tesla_screen_main && !main_available && !brake_pressed) {
@@ -126,19 +126,21 @@ static void tesla_screen_rx(const CANPacket_t *msg, bool autopark) {
 }
 
 static bool tesla_screen_param_valid(uint16_t param) {
-  bool valid = (param == 512U) || (param == 1536U);
+  const uint16_t screen_param = (uint16_t)(param & ~256U);
+  bool valid = (screen_param == 512U) || (screen_param == 1536U);
 #ifdef ALLOW_DEBUG
-  valid = valid || (param == 513U) || (param == 1537U);
+  valid = valid || (screen_param == 513U) || (screen_param == 1537U);
 #endif
   return valid;
 }
 
 static void tesla_screen_configure(uint16_t param) {
+  const uint16_t screen_param = (uint16_t)(param & ~256U);
   tesla_screen_reset();
-  tesla_screen_enabled = tesla_screen_param_valid(param);
+  tesla_screen_enabled = tesla_screen_param_valid(screen_param);
   tesla_screen_enabled = tesla_screen_enabled && ((unsigned int)alternative_experience == 32U);
-  tesla_screen_brake_disengage = (param == 1536U) || (param == 1537U);
-  tesla_screen_longitudinal = (param == 513U) || (param == 1537U);
+  tesla_screen_brake_disengage = (screen_param == 1536U) || (screen_param == 1537U);
+  tesla_screen_longitudinal = (screen_param == 513U) || (screen_param == 1537U);
   if (tesla_screen_enabled) {
     static const AolSafetyPolicy policy = {
       .reset = tesla_screen_reset,

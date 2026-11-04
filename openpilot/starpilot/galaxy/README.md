@@ -31,6 +31,8 @@ Browser JavaScript tests use Node 24; set `STARPILOT_NODE` to an existing Node
 24 executable when needed. A static preview can serve `web/` over loopback;
 it labels its sample System Monitor data and cannot edit a device.
 
+StarPort log uploads use the built-in developer Discord webhook.
+
 ## Pages and owners
 
 | Page | Current source and operations |
@@ -74,6 +76,16 @@ access uses the same authenticated, same-origin HTTP API as local Wi-Fi.
 
 ## Access and operation rules
 
+Home's outside temperature is an Open-Meteo weather estimate near the last
+saved navigation location, not a vehicle sensor reading. The authenticated
+weather endpoint fetches asynchronously, rounds coordinates to two decimal
+places before sending them to Open-Meteo, caches successful requests for ten
+minutes and backs off failed requests for one minute. Changed locations may
+refresh after one minute. Data older than thirty minutes is unavailable;
+no saved location means no weather request. The Home page respects Use Metric
+and stops weather polling when hidden. Device thermal sensors are not cabin-air
+thermometers, so no cabin temperature is inferred from CPU, modem or board heat.
+
 ### Optional reverse proxy
 
 While offroad, open **Toggles → Developer → Reverse proxy**. Enter the proxy IP
@@ -108,7 +120,24 @@ hardware validation.
 
 The server requires the actual peer and socket destination to be local for
 passwordless access. Proxy headers select the password-backed path. The Host
-must match the destination address, and JSON writes require that same origin.
+must match the destination address or an independently discovered local DNS
+identity, including the listening port. DNS identities come from the device's
+OS hostname (with its local resolver search domains) or the socket destination's
+reverse DNS records. Each name must forward-resolve only to that exact IPv4
+destination. A request-selected name merely resolving to a private address is
+not trusted, because that would allow DNS rebinding. This trusts the local
+OS/DHCP/DNS infrastructure; arbitrary aliases without that identity metadata
+are not admitted as API/session origins. For those aliases, direct local
+GET/HEAD of exactly `/` without Origin redirects to the actual socket's
+IP-and-port address. Browsers follow this automatically without a password or
+hostname registration, but the address bar changes to the IP. Curl to the DNS
+URL needs `-L`; with a manually overridden Host, request the returned Location
+without that override instead. The redirect sends no cookies and never applies to API paths,
+writes, forwarded requests, or remote transport. DNS discovery has a one-second
+bound and a five-second destination-specific cache. Literal IP access remains available
+when discovery fails. A manually overridden portless Host is accepted only for
+GET/HEAD of the landing document without Origin, never API/session requests.
+JSON writes require the same exact origin.
 Sessions use opaque HttpOnly, SameSite=Strict cookies; a local session cannot
 authorize a remote request. A session is checked again after slower reads and
 before sensitive results are returned. The server bounds connections, request

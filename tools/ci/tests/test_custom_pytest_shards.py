@@ -151,15 +151,16 @@ def test_changed_source_in_all_jobs_denied_against_checkout(jobs):
     shards.aggregate(directory, 2)
 
 
-def test_exact_parameter_nodes_whole_other_modules_and_bounded_heavy_groups():
+@pytest.mark.parametrize('count', [24, 32])
+def test_exact_parameter_nodes_whole_other_modules_and_bounded_heavy_groups(count):
   heavy = 'openpilot/starpilot/car/toyota/tests/test_legacy_advert_callers.py'
   catalog = [f'{heavy}::test_independent[{i}]' for i in range(126)] + ['other.py::test_case[1]', 'other.py::test_case[10]']
-  assigned, loads = shards.partition(catalog, 24)
+  assigned, loads = shards.partition(catalog, count)
   assert sorted(node for group in assigned for node in group) == sorted(catalog)
   assert max(loads) <= 240
   assert any('other.py::test_case[1]' in group and 'other.py::test_case[10]' in group for group in assigned)
   assert [sum(node.startswith(heavy) for node in group) for group in assigned].count(60) == 2
-  assert shards.partition(catalog, 24) == (assigned, loads)
+  assert shards.partition(catalog, count) == (assigned, loads)
 
 
 @pytest.mark.parametrize('catalog', [[], ['a.py::test_a', 'a.py::test_a'], ['../a.py::test_a'], ['/a.py::test_a'], ['a.py']])
@@ -612,5 +613,41 @@ def test_measured_slow_module_exact_function_and_leaf_groups(module, counts, exp
   assert max(loads) <= 240
   assert sum(loads) == len(catalog) * rate
   reverse, reverse_loads = shards.partition(list(reversed(catalog)), 24)
+  assert [set(group) for group in reverse] == [set(group) for group in assignment]
+  assert reverse_loads == loads
+
+
+@pytest.mark.parametrize('count', [0, 33, True, 1.5])
+def test_invalid_shard_count_still_denied(count):
+  with pytest.raises(ValueError):
+    shards.partition(['a.py::test_a'], count)
+
+
+@pytest.mark.parametrize("count", [24, 32])
+def test_ford_library_cases_keep_complete_timelines_in_bounded_groups(count):
+  module = 'openpilot/starpilot/tests/test_ford_bluepilot_library_lifecycle.py'
+  counts = {
+      "test_library_angle_curvature_aol_native_lifecycle": 96,
+      "test_model_loss_still_withdraws_library_output_through_actual_callers": 3,
+      "test_gas_held_first_engagement": 8,
+      "test_sustained_real_loop_lag_still_disables_ford": 1,
+      "test_cancel_at_every_native_receipt_phase": 20,
+      "test_manual_eps_refusal_keeps_aol_intent_without_steering_through_fault": 2,
+      "test_cruise_resume_preserves_deliberate_lateral_pause": 2,
+      "test_manual_steering_retires_held_turn_limit_alert": 2,
+      "test_fresh_cruise_withdrawal_after_previous_output_expires": 4,
+      "test_reengaging_in_a_manual_curve_respects_native_convergence": 32,
+      "test_brake_retains_independent_lateral_intent": 48,
+      "test_starpilot_tuning_uses_current_native_aol_path": 32,
+      "test_starpilot_low_speed_assistance_survives_brake_with_native_limits": 8
+  }
+  catalog = [f"{module}::{name}[{index}]" for name, cases in counts.items() for index in range(cases)]
+  assignment, loads = shards.partition(catalog, count)
+  assert len(catalog) == 258
+  assert sorted(node for group in assignment for node in group) == sorted(catalog)
+  assert max(map(len, assignment)) <= 48
+  assert max(loads) <= 240
+  assert sum(loads) == 258 * 5
+  reverse, reverse_loads = shards.partition(list(reversed(catalog)), count)
   assert [set(group) for group in reverse] == [set(group) for group in assignment]
   assert reverse_loads == loads

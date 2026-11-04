@@ -125,7 +125,7 @@ static safety_config volkswagen_pq_init(uint16_t param) {
     {MSG_MFLA_1, 1, 8, .check_relay = false},
   };
 
-  static RxCheck volkswagen_pq_rx_checks[] = {
+  static const RxCheck volkswagen_pq_rx_checks[] = {
     {.msg = {{MSG_LENKHILFE_3, 0, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_BREMSE_1, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_MOTOR_2, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
@@ -134,7 +134,7 @@ static safety_config volkswagen_pq_init(uint16_t param) {
     {.msg = {{MSG_GRA_NEU, 0, 4, 30U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
   };
 
-  static RxCheck volkswagen_pq_rx_checks_bus1[] = {
+  static const RxCheck volkswagen_pq_rx_checks_bus1[] = {
     {.msg = {{MSG_LENKHILFE_3, 1, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_BREMSE_1, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_MOTOR_2, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},

@@ -11,7 +11,6 @@ DESCRIPTIONS = {
   'ReduceMotion': 'Reduces interface animations for a steadier display.',
   'IsMetric': 'On displays speed and distance in kilometers; Off uses miles. Saved speed-limit offsets keep their physical values.',
   'IsRhdDetected': 'Sets the initial steering-wheel side used by driver monitoring. Applies next drive; automatic side detection continues.',
-  'FordPrefSteerAngleCurvature': 'Uses steering pinion angle instead of yaw rate to estimate Ford steering curvature. Applies at the next vehicle startup.',
   'lane_change:turn_signal_guidance': 'Uses your turn signal to help the model choose a turning path at intersections.',
   'AlphaLongitudinalEnabled': ('Requests StarPilot speed control instead of factory ACC. May disable Automatic Emergency Braking. ' +
                               'Applies after the next startup; exact vehicle takeover checks remain required.'),
@@ -54,6 +53,7 @@ DESCRIPTIONS = {
   'FasterLeadTakeoff': ('Improves launches from a stop and responds sooner when a lead starts moving. ' +
                         'Selected acceleration profiles, stop detection and vehicle limits still apply.'),
   'CustomPersonalities': 'Uses your following-time and jerk settings for the selected driving personality.',
+  'profile:stopped_gap': 'Adds this distance to the following gap behind a stopped lead vehicle.',
   'profile:global_acceleration': 'Chooses the acceleration curve used by personalities set to Selected Profile.',
   'profile:global_braking': 'Chooses the braking response used by personalities set to Selected Profile.',
   'reset_profiles': 'Restores the default acceleration, braking and following curves and presets.',
@@ -68,6 +68,7 @@ DESCRIPTIONS = {
   'SLCPriority1': 'Chooses the first source checked for a fresh speed limit.',
   'SLCPriority2': 'Chooses the source used when the primary source has no fresh speed limit.',
   'slc_reset': 'Resets saved speed-limit offsets while retaining valid configured speed ranges.',
+  'reset_calibration': 'Clears saved camera and steering calibration. The device recalibrates on the next drive.',
   'reset_driver_monitoring': 'Clear saved wheel-side detection. Automatic detection restarts on the next drive.',
   'AlwaysAllowUploads': 'Allows queued full logs and videos to upload over metered networks. This uses mobile data.',
   'UseVOACC': ('Use vision-only adaptive cruise control instead of radar-assisted lead detection. ' +
@@ -89,12 +90,15 @@ DESCRIPTIONS = {
   'VolkswagenHCADeltaRateUp': 'Sets how quickly steering torque may rise, in HCA counts per frame.',
   'VolkswagenHCADeltaRateDown': 'Sets how quickly steering torque may fall, in HCA counts per frame.',
   'VolkswagenLightdMode': 'Chooses camera-controlled headlights: off, shadow logging only, automatic low beam, or low beam with high beam assist.',
-  'FordLateralMode': 'Chooses the native Ford steering controller or the supported BluePilot angle controller.',
   'TeslaAOLScreenTap': 'Lets a three-finger tap on a supported Tesla screen toggle Always On Lateral.',
   'TeslaAOLDisengageOnBrake': 'Disarms screen-tap Always On Lateral when you press the brake.',
   'RemoteStartBootsComma': 'Wakes comma during GM remote start.',
   'HKGRemoteStartBootsComma': 'Wakes comma during Hyundai, Kia or Genesis remote climate operation.',
   'IgnoreIgnitionLine': 'Uses GM CAN ignition instead of the harness ignition signal.',
+  'heading:starport': 'Settings for connecting Android Auto to the car through StarPort.',
+  'StarPortNewSetup': 'Shows the guided StarPort setup with a live checklist instead of the classic setup screens.',
+  'StarPortAllowHevc': 'Lets a car that offers only H.265 video receive H.265; a car with an H.264 mode keeps H.264.',
+  'StarPortDedicatedWifi': "Joins the car's Wi-Fi on a second interface so the comma stays on its home Wi-Fi or phone hotspot.",
   'TeslaWakeOnCAN': 'Wakes comma when the Tesla wakes up, before you press the brake.',
   'RadarRecoveryAlert': 'Play a chime and show a brief message when a radar fault clears. You must re-engage manually.',
   'CameraView': 'Chooses the camera view shown on the driving screen.',
@@ -145,10 +149,28 @@ DESCRIPTIONS = {
   'conditional:mode': 'Chooses Chill, Experimental or automatic switching based on the configured driving conditions.',
   'conditional:reset': 'Restores the default conditional driving-mode settings.',
   'conditional:manual_reset': 'Returns both remembered manual driving-mode choices to Automatic.',
+  'FordPrefLateralControl': ('Chooses BluePilot Curvature, BluePilot Angle or StarPilot Controller. Mach-E and classic Explorer' +
+    ' default to StarPilot; other supported Fords default to BluePilot Curvature. Lane centering and offset use the global' +
+    ' StarPilot settings. Change while parked.'),
+  'FordPrefSteerAngleCurvature': ('Measures curvature from the steering pinion angle instead of the yaw-rate sensor, in control and' +
+    ' Panda safety. For Fords with a faulty yaw sensor.'),
+  'enable_human_turn_detection_curv': 'Eases off steering while you turn the wheel through a turn yourself.',
+  'lane_change_factor_high_curv': 'Scales steering during a lane change. Values under 1.0 soften it.',
+  'custom_profile_curv': 'Uses the two predicted-curvature blend settings below instead of the built-in profile.',
+  'pc_blend_ratio_low_C_UI_curv': 'Mixes predicted curvature into gentle curves: 0 follows the plan, 1 follows the prediction.',
+  'pc_blend_ratio_high_C_UI_curv': 'Mixes predicted curvature into sharp curves: 0 follows the plan, 1 follows the prediction.',
+  'FordLowSpeedFactor_ang': 'Scales the low-speed steering response in angle mode. 1.0 is the default feel.',
+  'FordHighSpeedFactor_ang': 'Scales the high-speed steering response in angle mode. 1.0 is the default feel.',
+  'FordHighSpeedDampening_ang': ('Tunes the straight-road response at highway speed in angle mode: lower it if the car oversteers,' +
+    ' raise it if it understeers.'),
+  'lane_change_factor_high_ang': 'Scales steering during a lane change in angle mode. Values over 1.0 strengthen it.',
 }
 
 # These are initialization explanations, not a second defaults table.
 INITIALIZATION = {
+  'StarPortNewSetup': 'Applies the next time the setup screen opens.',
+  'StarPortAllowHevc': 'Applies from the next StarPort connection.',
+  'StarPortDedicatedWifi': 'Applies from the next StarPort connection.',
   'LateralControllerSelection': ('Applies when driving processes next start: the controller class, vehicle policy and ' +
     'PID/filter state are constructed together.'),
   'UseStarPilotLongitudinalPlanner': 'Applies when the planner next starts: each choice runs a different planner process with its own subscriptions and state.',
@@ -161,13 +183,13 @@ INITIALIZATION = {
   'VoltOnePedalMode': ('First enable requires the next vehicle startup to configure the braking safety ' +
     'permission. An already admitted mode can be disabled live.'),
   'VoltSNG': 'Applies when the vehicle controller next starts: its fresh resume-plan input is created for the selected stop-and-go mode.',
-  'FordLateralMode': 'Requires the next vehicle startup to select the steering controller, admitted CAN mode and Panda safety word.',
   'TeslaAOLScreenTap': 'Requires the next vehicle startup to configure the screen-button CAN source and matching safety permission.',
   'TeslaAOLDisengageOnBrake': 'Requires the next vehicle startup to configure the screen-button brake/disarm safety permission.',
   'RemoteStartBootsComma': 'Requires a device restart to load the matching Panda ignition firmware.',
   'HKGRemoteStartBootsComma': 'Requires a device restart to load the matching Panda ignition firmware.',
   'IgnoreIgnitionLine': 'Requires a device restart to load the matching Panda ignition firmware.',
   'TeslaWakeOnCAN': 'Requires a device restart to load the matching Panda ignition firmware.',
+  'FordPrefSteerAngleCurvature': 'Requires the next vehicle startup to configure the pinion measurement in Panda safety.',
 }
 
 CONDITIONS = {

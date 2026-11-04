@@ -20,7 +20,7 @@ from openpilot.starpilot.galaxy.batch_routes import change_drive_state, delete_r
 from openpilot.starpilot.galaxy.access import AccessStatus, default_owner
 from openpilot.starpilot.galaxy.auth import LocalSessions
 from openpilot.starpilot.galaxy.http_server import (_LocalHTTPHandler, _LocalHTTPServer, allowed_authority,
-                                                  direct_local_connection, install_origin_allowed, static_asset)
+                                                  direct_local_connection, dns_authority_name, install_origin_allowed, static_asset)
 from openpilot.starpilot.galaxy.camera_snapshot import CameraSnapshot, SnapshotDenied, SnapshotUnavailable
 from openpilot.starpilot.galaxy.remote import default_remote_pairing, gateway_cookie_valid
 from openpilot.starpilot.galaxy.crash_reports import CrashChanged, CrashMissing, CrashReports, CrashUnavailable
@@ -97,12 +97,18 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                 sounds=None, software_operations=None, drive_stats=None, layout_preview_socket=None, controllers_socket=None,
                 remote_pairing=None, parked=None, camera_snapshot=None, clock=time.monotonic, starport_setup=None,
                 starport_client=None, navigation=None, offline_maps=None, drive_state=None, cloud_provider=None, cloud_offroad=None, projection_layout=None,
-                local_access=None, tmux_live=None, starport_logs=None, hotspot=None, toyota_tools=None, replay_client=None, replay_root=None,
-                spotify_setup=None, companion=None, phone_location=None, reverse_proxy=None):
+                local_access=None, tmux_live=None, starport_logs=None, starport_log_sender=None, hotspot=None, toyota_tools=None,
+                replay_client=None, replay_root=None,
+                spotify_setup=None, companion=None, phone_location=None, reverse_proxy=None, local_hostnames=None):
+  from openpilot.starpilot.galaxy.local_hostnames import LocalHostnames
+  hostname_source = local_hostnames if local_hostnames is not None else LocalHostnames(clock=clock)
   from openpilot.starpilot.galaxy.companion import CompanionRegistry, APK_PATH
   from openpilot.starpilot.gps.phone import PhoneGpsPublisher
   companion_source = companion if companion is not None else CompanionRegistry()
-  training_results_source = training_results if training_results is not None else FlmTrainingResults()
+  if training_results is None:
+    from openpilot.common.params import Params
+    training_results = FlmTrainingResults(params=Params())
+  training_results_source = training_results
   phone_location_source = phone_location if phone_location is not None else PhoneGpsPublisher()
   cloud = cloud_provider
   hotspot_source = hotspot
@@ -136,6 +142,17 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
       from openpilot.starpilot.galaxy.starport_logs import StarPortLogs
       starport_logs_source = StarPortLogs()
     return starport_logs_source
+  starport_log_sender_source = starport_log_sender
+  starport_log_sender_lock = threading.Lock()
+
+  def starport_log_sender():
+    nonlocal starport_log_sender_source
+    with starport_log_sender_lock:
+      if starport_log_sender_source is None:
+        from openpilot.starpilot.galaxy.starport_send import StarPortLogSender, device_summary
+        source = starport_logs()
+        starport_log_sender_source = StarPortLogSender(source.bundle, summary=lambda: device_summary(source.directory))
+    return starport_log_sender_source
   software_source = software
   software_operations_source = software_operations
   software_lock = threading.Lock()
@@ -175,6 +192,17 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
     evidence_source = EvidenceSource()
 
   monitor_source = monitor if monitor is not None else SystemMonitor(messages=evidence_source)
+  weather_source = None
+  weather_lock = threading.Lock()
+
+  def weather_status():
+    nonlocal weather_source
+    with weather_lock:
+      if weather_source is None:
+        from openpilot.starpilot.galaxy.weather import WeatherSource
+        weather_source = WeatherSource()
+        server.weather_source = weather_source
+      return weather_source.sample()
   vehicle_display = DeviceStateSource(evidence_source)
 
   def context_source(params):
@@ -533,6 +561,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
       proxy = reverse_proxy if reverse_proxy is not None else proxy_settings.current
       host = self.headers.get('Host', '')
       origin = self.headers.get('Origin')
+      if len(self.headers.get_all('Host', [])) != 1 or len(self.headers.get_all('Origin', [])) > 1:
+        self.json(403, {'error': 'Ambiguous request origin'})
+        return False
       local_address = self.connection.getsockname()[0]
       if getattr(self.server, 'remote_transport', False):
         record = pairing.read()
@@ -554,7 +585,23 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
         return True
       if proxy is not None and proxy.allows(self.client_address[0], host, origin, mutation=mutation):
         return True
-      if not allowed_authority(host, local_address, self.server.server_port) or \
+      # curl can override Host without the nonstandard port. Permit that form
+      # only for the inert landing document, never API/session reads or writes.
+      portless_landing = self.command in ('GET', 'HEAD') and self.path == '/' and origin is None
+      authority_allowed = allowed_authority(host, local_address, self.server.server_port, local_hostnames=hostname_source,
+                                            allow_portless=portless_landing)
+      if not authority_allowed and portless_landing and self.direct_local() and \
+         dns_authority_name(host, self.server.server_port, allow_portless=True) is not None:
+        # An arbitrary A-only alias has no independent identity to trust. Let
+        # its landing navigation enter through the real socket address instead.
+        # Never serve API data or create a session under that named origin.
+        self.send_response(302)
+        self.send_header('Location', f'http://{local_address}:{self.server.server_port}/')
+        self.send_header('Content-Length', '0')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        return False
+      if not authority_allowed or \
          (mutation and origin != f'http://{host}') or \
          (origin is not None and origin != f'http://{host}'):
         self.json(403, {'error': 'Local access only'})
@@ -880,6 +927,12 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
             self.json(200, result)
           else:
             self.json(401, {'error': 'Sign in to Galaxy'})
+      elif path == '/api/weather':
+        if not self.require_session():
+          return
+        result = weather_status()
+        if self.require_session():
+          self.json(200, result)
       elif path == '/api/system/monitor':
         if not self.require_session():
           return
@@ -908,6 +961,9 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           # immediately before sending potentially sensitive content.
           if self.require_session():
             self.json(200, result)
+      elif path == '/api/starport/logs/send':
+        if self.require_session():
+          self.json(200, starport_log_sender().status())
       elif path == '/api/starport/logs' or path.startswith('/api/starport/logs/'):
         if not self.require_session():
           return
@@ -1615,6 +1671,7 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
                       '/api/replay/export-start',
                       '/api/galaxy/pair', '/api/galaxy/unpair', '/api/galaxy/device-name', '/api/galaxy/hotspot', '/api/cameras/snapshot',
                       '/api/starport/layout', '/api/starport/enable', '/api/starport/control', '/api/starport/pairing',
+                      '/api/starport/logs/send',
                       '/api/starport/pairing/response', '/api/starport/pairing/cancel', '/api/starport/pairing/select',
                       '/api/spotify/enable', '/api/spotify/key', '/api/spotify/preferences', '/api/spotify/control', '/api/spotify/maintenance',
                       '/api/ui/layout', '/api/ui/layout/preview', '/api/favorites/slots',
@@ -2294,6 +2351,27 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
           else:
             self.json(401, {'error': 'Sign in to Galaxy'})
         return
+      if path == '/api/starport/logs/send':
+        if type(payload) is not dict or set(payload) != {'message'}:
+          self.json(400, {'error': 'Invalid StarPort log send request'})
+          return
+        identity = self.settings_session()
+        if identity is None:
+          self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        from openpilot.starpilot.galaxy.starport_send import SendBusy, SendRejected
+        try:
+          result = starport_log_sender().start(payload['message'])
+        except SendRejected as error:
+          self.json(400, {'error': str(error)})
+        except SendBusy as error:
+          self.json(409, {'error': str(error)})
+        else:
+          if self.settings_session() == identity:
+            self.json(202, result)
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
+        return
       if path == '/api/starport/enable':
         if type(payload) is not dict or set(payload) not in ({'enabled'}, {'enabled', 'enableBluetooth'}) or \
            type(payload['enabled']) is not bool or type(payload.get('enableBluetooth', False)) is not bool or \
@@ -2342,6 +2420,18 @@ def make_server(*, port=8082, host='127.0.0.1', monitor=None, owner=None, crashe
               self.json(200, {'status': current})
             else:
               self.json(401, {'error': 'Sign in to Galaxy'})
+          return
+        if action == 'new_setup' and set(payload) == {'action', 'enabled'} and type(payload['enabled']) is bool:
+          # The way back to the classic screens, so it works with the StarPort service off or broken.
+          from openpilot.starpilot.system.starport import new_setup
+          if not configuration_allowed():
+            self.json(403, {'error': 'Park before changing the setup screens'})
+          elif not new_setup.set_enabled(payload['enabled']):
+            self.json(503, {'error': 'Could not save the setup screen choice'})
+          elif self.settings_session() == identity:
+            self.json(200, {'newSetup': new_setup.enabled()})
+          else:
+            self.json(401, {'error': 'Sign in to Galaxy'})
           return
         if not starport_setup_owner().enabled():
           self.json(409, {'error': 'Enable StarPort first'})

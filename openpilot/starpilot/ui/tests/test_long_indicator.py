@@ -3,7 +3,7 @@ from types import SimpleNamespace as NS
 from typing import cast
 from unittest.mock import Mock
 
-import pyray as rl
+from openpilot.starpilot.ui.raylib import rl
 import pytest
 
 from openpilot.selfdrive.ui.mici.onroad import long_indicator as native
@@ -50,7 +50,9 @@ def test_same_selected_bars_and_lead_on_both_profiles(display, profile, personal
 
 @pytest.mark.parametrize('traffic', (False, True))
 def test_art_scales_uniformly_without_clipping_or_downsized_source_textures(display, monkeypatch, traffic):
-  display._draw_centered = indicator.PersonalityWidget._draw_centered
+  def draw_all_art_opaque(art, rect, y, alpha, *args, **kwargs):
+    return indicator.PersonalityWidget._draw_centered(art, rect, y, 1., *args, **kwargs)
+  display._draw_centered = draw_all_art_opaque
   draw = Mock()
   monkeypatch.setattr(rl, 'draw_texture_pro', draw)
   state = road(traffic_mode=traffic, traffic_display=TrafficDisplay('active', 'TRAFFIC') if traffic else None)
@@ -97,18 +99,25 @@ def test_gas_override_blinks_only_selected_bars_and_clears_on_disengagement(disp
 
 
 @pytest.mark.parametrize('profile', list(Profile))
-def test_traffic_label_and_accent_restore_selected_personality(display, profile):
+def test_traffic_accent_is_stable_without_labels_and_restores_personality(display, profile):
   display.fonts.profile = profile
   state = road(personality=2, traffic_mode=True, traffic_display=TrafficDisplay('active', 'TRAFFIC'))
   draws = settle(display, state)
   assert draws[2].args[4] == (200, 32, 48)
   assert draws[4].args[3] == pytest.approx(.35, abs=.001)
   assert all(draws[i].args[3] < .001 for i in (3, 5, 7))
-  assert display.fonts.draw.call_args.args[0] == 'TRF'
-  for status, label in (('paused', 'PAUSE'), ('off', 'OFF')):
-    draws = settle(display, replace(state, traffic_mode=False, traffic_display=TrafficDisplay(status, '')))
-    assert all(draws[i].args[3] == pytest.approx(.9, abs=.001) for i in (2, 4, 6))
-    assert display.fonts.draw.call_args.args[0] == label
+  original_rect = draws[2].args[1]
+  for status in ('paused', 'unavailable_source', 'unavailable_profile', None):
+    draws = settle(display, replace(state, traffic_mode=False, traffic_selected=True,
+                                    gas_pressed_override=True,
+                                    traffic_display=TrafficDisplay(status, '') if status else None))
+    assert draws[2].args[4] == (200, 32, 48)
+    assert draws[2].args[3] == pytest.approx(.9, abs=.001)
+    rect = draws[2].args[1]
+    assert (rect.x, rect.y, rect.width, rect.height) == (original_rect.x, original_rect.y, original_rect.width, original_rect.height)
+  draws = settle(display, replace(state, traffic_mode=False, traffic_selected=False, traffic_display=TrafficDisplay('off', 'OFF')))
+  assert all(draws[i].args[3] == pytest.approx(.9, abs=.001) for i in (2, 4, 6))
+  display.fonts.draw.assert_not_called()
 
 
 def test_large_default_sits_left_of_driver_monitor_and_custom_positions_stay_put(display):
@@ -184,3 +193,17 @@ def test_routine_lane_guidance_keeps_widget_and_urgent_alerts_hide_it(display, p
       assert not draws
     else:
       assert (draws[-7].args[3] > .99) if visible else (draws[-7].args[3] < .001)
+
+
+@pytest.mark.parametrize(('alpha', 'visible_alpha'), ((0., None), (.0001, None), (.0019, None),
+                                                       (.002, 1), (1/255, 1), (.5, 128), (1., 255)))
+def test_invisible_art_avoids_gpu_submission_without_losing_faint_visible_art(display, monkeypatch, alpha, visible_alpha):
+  display._prepare()
+  draw = Mock()
+  monkeypatch.setattr(rl, 'draw_texture_pro', draw)
+  indicator.PersonalityWidget._draw_centered(display._lead_car[0], rl.Rectangle(476, 160, 60, 80), 100, alpha)
+  if visible_alpha is None:
+    draw.assert_not_called()
+  else:
+    draw.assert_called_once()
+    assert draw.call_args.args[-1].a == visible_alpha

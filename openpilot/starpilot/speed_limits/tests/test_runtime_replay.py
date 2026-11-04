@@ -552,6 +552,8 @@ class RuntimeReplayTests(unittest.TestCase):
     from openpilot.cereal import messaging
     from openpilot.selfdrive.car import card
     now_ns = time.monotonic_ns()
+    # Advance logical source time explicitly below, independent of host scheduling.
+    self.enterContext(mock.patch.object(card.time, 'monotonic_ns', return_value=now_ns))
     observation = SimpleNamespace(status=Status.VALID, speed_mps=30.0, observed_ns=now_ns - 20_000_000,
                                   valid_until_ns=now_ns + 1_000_000_000, episode=4)
     state = messaging.new_message('slcState')
@@ -622,7 +624,7 @@ class RuntimeReplayTests(unittest.TestCase):
       {'carControl': car.CarControl(enabled=True, longActive=True), 'slcState': state.slcState,
        'deviceState': SimpleNamespace(startedMonoTime=1)}, now_ns - 10_000_000))
     self.enterContext(mock.patch.object(fake, 'CI', SimpleNamespace(
-      CS=SimpleNamespace(dashboard_limit=SimpleNamespace(observation=observation)),
+      CC=None, CS=SimpleNamespace(dashboard_limit=SimpleNamespace(observation=observation)),
       update=lambda packets: car.CarState(canValid=True, cruiseState={'available': True})), create=True))
     self.enterContext(mock.patch.object(fake, 'RI', SimpleNamespace(update=lambda packets: None), create=True))
     with (mock.patch.object(card.messaging, 'drain_sock_raw', return_value=[]),
@@ -810,7 +812,7 @@ class RuntimeReplayTests(unittest.TestCase):
     current_cs = [car.CarState(canValid=True, cruiseState={'available': True},
                                buttonEvents=[car.CarState.ButtonEvent(type='accelCruise', pressed=True)])]
     self.enterContext(mock.patch.object(fake, 'CI', SimpleNamespace(
-      CS=SimpleNamespace(dashboard_limit=SimpleNamespace(observation=observation) if observation is not None else None),
+      CC=None, CS=SimpleNamespace(dashboard_limit=SimpleNamespace(observation=observation) if observation is not None else None),
       update=lambda packets: current_cs[0]), create=True))
     self.enterContext(mock.patch.object(fake, 'RI', SimpleNamespace(update=lambda packets: None), create=True))
     return fake, current_cs

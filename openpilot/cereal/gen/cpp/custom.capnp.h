@@ -75,7 +75,6 @@ enum class Family_b03bf8f7c878937a: uint16_t {
 CAPNP_DECLARE_ENUM(Family, b03bf8f7c878937a);
 CAPNP_DECLARE_SCHEMA(af3712fe799c76ce);
 CAPNP_DECLARE_SCHEMA(f35cc4560bbf6ec2);
-CAPNP_DECLARE_SCHEMA(be96311f76899cf7);
 CAPNP_DECLARE_SCHEMA(911f05bba9c1fc1f);
 CAPNP_DECLARE_SCHEMA(918d19aa5875c92d);
 CAPNP_DECLARE_SCHEMA(de92e382e2400293);
@@ -646,28 +645,12 @@ struct StarPilotCarState {
   class Reader;
   class Builder;
   class Pipeline;
-  struct LightState;
   struct ToyotaCruise;
   struct Gps;
   struct FeedbackPublication;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f35cc4560bbf6ec2, 3, 6)
-    #if !CAPNP_LITE
-    static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
-    #endif  // !CAPNP_LITE
-  };
-};
-
-struct StarPilotCarState::LightState {
-  LightState() = delete;
-
-  class Reader;
-  class Builder;
-  class Pipeline;
-
-  struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(be96311f76899cf7, 9, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(f35cc4560bbf6ec2, 3, 7)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -3469,17 +3452,8 @@ public:
   inline bool hasToyotaCruise() const;
   inline  ::cereal::StarPilotCarState::ToyotaCruise::Reader getToyotaCruise() const;
 
-  inline bool getLowBeamOn() const;
-
-  inline bool getHighBeamOn() const;
-
-  inline bool getHighBeamStalk() const;
-
-  inline bool getFrontWipersOn() const;
-
-  inline  ::uint8_t getLightSensorBucket() const;
-
-  inline bool getLightSensorFault() const;
+  inline bool hasSteeringLimitInfo() const;
+  inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Reader getSteeringLimitInfo() const;
 
 private:
   ::capnp::_::StructReader _reader;
@@ -3650,23 +3624,12 @@ public:
   inline void adoptToyotaCruise(::capnp::Orphan< ::cereal::StarPilotCarState::ToyotaCruise>&& value);
   inline ::capnp::Orphan< ::cereal::StarPilotCarState::ToyotaCruise> disownToyotaCruise();
 
-  inline bool getLowBeamOn();
-  inline void setLowBeamOn(bool value);
-
-  inline bool getHighBeamOn();
-  inline void setHighBeamOn(bool value);
-
-  inline bool getHighBeamStalk();
-  inline void setHighBeamStalk(bool value);
-
-  inline bool getFrontWipersOn();
-  inline void setFrontWipersOn(bool value);
-
-  inline  ::uint8_t getLightSensorBucket();
-  inline void setLightSensorBucket( ::uint8_t value);
-
-  inline bool getLightSensorFault();
-  inline void setLightSensorFault(bool value);
+  inline bool hasSteeringLimitInfo();
+  inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Builder getSteeringLimitInfo();
+  inline void setSteeringLimitInfo( ::cereal::StarPilotCarControl::SteeringLimitInfo::Reader value);
+  inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Builder initSteeringLimitInfo();
+  inline void adoptSteeringLimitInfo(::capnp::Orphan< ::cereal::StarPilotCarControl::SteeringLimitInfo>&& value);
+  inline ::capnp::Orphan< ::cereal::StarPilotCarControl::SteeringLimitInfo> disownSteeringLimitInfo();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -3692,227 +3655,7 @@ public:
   inline  ::cereal::LearningApplication::Pipeline getLearningApplication();
   inline  ::cereal::StarPilotCarState::FeedbackPublication::Pipeline getFeedbackPublication();
   inline  ::cereal::StarPilotCarState::ToyotaCruise::Pipeline getToyotaCruise();
-private:
-  ::capnp::AnyPointer::Pipeline _typeless;
-  friend class ::capnp::PipelineHook;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::ToDynamic_;
-};
-#endif  // !CAPNP_LITE
-
-class StarPilotCarState::LightState::Reader {
-public:
-  typedef LightState Reads;
-
-  Reader() = default;
-  inline explicit Reader(::capnp::_::StructReader base): _reader(base) {}
-
-  inline ::capnp::MessageSize totalSize() const {
-    return _reader.totalSize().asPublic();
-  }
-
-#if !CAPNP_LITE
-  inline ::kj::StringTree toString() const {
-    return ::capnp::_::structString(_reader, *_capnpPrivate::brand());
-  }
-#endif  // !CAPNP_LITE
-
-  inline  ::uint8_t getMode() const;
-
-  inline bool getLowBeamValid() const;
-
-  inline bool getDarkRequest() const;
-
-  inline  ::uint8_t getBrightnessCode() const;
-
-  inline float getAmbientLog2Lux() const;
-
-  inline float getFastLog2Lux() const;
-
-  inline float getSlowLog2Lux() const;
-
-  inline float getWideLog2Lux() const;
-
-  inline float getNarrowLog2Lux() const;
-
-  inline bool getDarkSlow() const;
-
-  inline bool getDarkTunnel() const;
-
-  inline bool getNightLatch() const;
-
-  inline float getConfidence() const;
-
-  inline  ::uint8_t getRegime() const;
-
-  inline float getSolarElevationDeg() const;
-
-  inline float getSolarAzimuthDeg() const;
-
-  inline bool getSolarValid() const;
-
-  inline float getTunnelCue() const;
-
-  inline bool getHbaValid() const;
-
-  inline bool getHighBeamPermitted() const;
-
-  inline  ::uint8_t getHbaReason() const;
-
-  inline bool getSensorBlocked() const;
-
-  inline  ::uint8_t getOncomingCount() const;
-
-  inline  ::uint8_t getPrecedingCount() const;
-
-  inline  ::uint8_t getCandidateCount() const;
-
-  inline float getHbaClearForS() const;
-
-  inline  ::uint32_t getHbaFrameId() const;
-
-  inline float getWideFrameAgeMs() const;
-
-  inline float getNarrowFrameAgeMs() const;
-
-  inline float getHbaProcessingMs() const;
-
-private:
-  ::capnp::_::StructReader _reader;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::ToDynamic_;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::_::PointerHelpers;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::List;
-  friend class ::capnp::MessageBuilder;
-  friend class ::capnp::Orphanage;
-};
-
-class StarPilotCarState::LightState::Builder {
-public:
-  typedef LightState Builds;
-
-  Builder() = delete;  // Deleted to discourage incorrect usage.
-                       // You can explicitly initialize to nullptr instead.
-  inline Builder(decltype(nullptr)) {}
-  inline explicit Builder(::capnp::_::StructBuilder base): _builder(base) {}
-  inline operator Reader() const { return Reader(_builder.asReader()); }
-  inline Reader asReader() const { return *this; }
-
-  inline ::capnp::MessageSize totalSize() const { return asReader().totalSize(); }
-#if !CAPNP_LITE
-  inline ::kj::StringTree toString() const { return asReader().toString(); }
-#endif  // !CAPNP_LITE
-
-  inline  ::uint8_t getMode();
-  inline void setMode( ::uint8_t value);
-
-  inline bool getLowBeamValid();
-  inline void setLowBeamValid(bool value);
-
-  inline bool getDarkRequest();
-  inline void setDarkRequest(bool value);
-
-  inline  ::uint8_t getBrightnessCode();
-  inline void setBrightnessCode( ::uint8_t value);
-
-  inline float getAmbientLog2Lux();
-  inline void setAmbientLog2Lux(float value);
-
-  inline float getFastLog2Lux();
-  inline void setFastLog2Lux(float value);
-
-  inline float getSlowLog2Lux();
-  inline void setSlowLog2Lux(float value);
-
-  inline float getWideLog2Lux();
-  inline void setWideLog2Lux(float value);
-
-  inline float getNarrowLog2Lux();
-  inline void setNarrowLog2Lux(float value);
-
-  inline bool getDarkSlow();
-  inline void setDarkSlow(bool value);
-
-  inline bool getDarkTunnel();
-  inline void setDarkTunnel(bool value);
-
-  inline bool getNightLatch();
-  inline void setNightLatch(bool value);
-
-  inline float getConfidence();
-  inline void setConfidence(float value);
-
-  inline  ::uint8_t getRegime();
-  inline void setRegime( ::uint8_t value);
-
-  inline float getSolarElevationDeg();
-  inline void setSolarElevationDeg(float value);
-
-  inline float getSolarAzimuthDeg();
-  inline void setSolarAzimuthDeg(float value);
-
-  inline bool getSolarValid();
-  inline void setSolarValid(bool value);
-
-  inline float getTunnelCue();
-  inline void setTunnelCue(float value);
-
-  inline bool getHbaValid();
-  inline void setHbaValid(bool value);
-
-  inline bool getHighBeamPermitted();
-  inline void setHighBeamPermitted(bool value);
-
-  inline  ::uint8_t getHbaReason();
-  inline void setHbaReason( ::uint8_t value);
-
-  inline bool getSensorBlocked();
-  inline void setSensorBlocked(bool value);
-
-  inline  ::uint8_t getOncomingCount();
-  inline void setOncomingCount( ::uint8_t value);
-
-  inline  ::uint8_t getPrecedingCount();
-  inline void setPrecedingCount( ::uint8_t value);
-
-  inline  ::uint8_t getCandidateCount();
-  inline void setCandidateCount( ::uint8_t value);
-
-  inline float getHbaClearForS();
-  inline void setHbaClearForS(float value);
-
-  inline  ::uint32_t getHbaFrameId();
-  inline void setHbaFrameId( ::uint32_t value);
-
-  inline float getWideFrameAgeMs();
-  inline void setWideFrameAgeMs(float value);
-
-  inline float getNarrowFrameAgeMs();
-  inline void setNarrowFrameAgeMs(float value);
-
-  inline float getHbaProcessingMs();
-  inline void setHbaProcessingMs(float value);
-
-private:
-  ::capnp::_::StructBuilder _builder;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::ToDynamic_;
-  friend class ::capnp::Orphanage;
-  template <typename, ::capnp::Kind>
-  friend struct ::capnp::_::PointerHelpers;
-};
-
-#if !CAPNP_LITE
-class StarPilotCarState::LightState::Pipeline {
-public:
-  typedef LightState Pipelines;
-
-  inline Pipeline(decltype(nullptr)): _typeless(nullptr) {}
-  inline explicit Pipeline(::capnp::AnyPointer::Pipeline&& typeless)
-      : _typeless(kj::mv(typeless)) {}
-
+  inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Pipeline getSteeringLimitInfo();
 private:
   ::capnp::AnyPointer::Pipeline _typeless;
   friend class ::capnp::PipelineHook;
@@ -17859,508 +17602,43 @@ inline ::capnp::Orphan< ::cereal::StarPilotCarState::ToyotaCruise> StarPilotCarS
       ::capnp::bounded<5>() * ::capnp::POINTERS));
 }
 
-inline bool StarPilotCarState::Reader::getLowBeamOn() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<70>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::Builder::getLowBeamOn() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<70>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setLowBeamOn(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<70>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::Reader::getHighBeamOn() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<71>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::Builder::getHighBeamOn() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<71>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setHighBeamOn(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<71>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::Reader::getHighBeamStalk() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<72>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::Builder::getHighBeamStalk() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<72>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setHighBeamStalk(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<72>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::Reader::getFrontWipersOn() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<73>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::Builder::getFrontWipersOn() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<73>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setFrontWipersOn(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<73>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::Reader::getLightSensorBucket() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::Builder::getLightSensorBucket() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setLightSensorBucket( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::Reader::getLightSensorFault() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<74>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::Builder::getLightSensorFault() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<74>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::Builder::setLightSensorFault(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<74>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getMode() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getMode() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<0>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setMode( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<0>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getLowBeamValid() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getLowBeamValid() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setLowBeamValid(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getDarkRequest() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getDarkRequest() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setDarkRequest(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getBrightnessCode() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getBrightnessCode() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setBrightnessCode( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getAmbientLog2Lux() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getAmbientLog2Lux() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<1>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setAmbientLog2Lux(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<1>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getFastLog2Lux() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getFastLog2Lux() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setFastLog2Lux(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<2>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getSlowLog2Lux() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getSlowLog2Lux() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setSlowLog2Lux(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getWideLog2Lux() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getWideLog2Lux() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<4>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setWideLog2Lux(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<4>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getNarrowLog2Lux() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getNarrowLog2Lux() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<5>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setNarrowLog2Lux(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<5>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getDarkSlow() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getDarkSlow() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setDarkSlow(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<10>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getDarkTunnel() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getDarkTunnel() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<11>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setDarkTunnel(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<11>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getNightLatch() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getNightLatch() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setNightLatch(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getConfidence() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getConfidence() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<6>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setConfidence(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<6>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getRegime() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getRegime() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setRegime( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<3>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getSolarElevationDeg() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getSolarElevationDeg() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<7>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setSolarElevationDeg(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<7>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getSolarAzimuthDeg() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getSolarAzimuthDeg() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setSolarAzimuthDeg(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<8>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getSolarValid() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getSolarValid() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setSolarValid(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getTunnelCue() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getTunnelCue() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setTunnelCue(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<9>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getHbaValid() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getHbaValid() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHbaValid(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getHighBeamPermitted() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getHighBeamPermitted() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHighBeamPermitted(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getHbaReason() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<40>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getHbaReason() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<40>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHbaReason( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<40>() * ::capnp::ELEMENTS, value);
-}
-
-inline bool StarPilotCarState::LightState::Reader::getSensorBlocked() const {
-  return _reader.getDataField<bool>(
-      ::capnp::bounded<328>() * ::capnp::ELEMENTS);
-}
-
-inline bool StarPilotCarState::LightState::Builder::getSensorBlocked() {
-  return _builder.getDataField<bool>(
-      ::capnp::bounded<328>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setSensorBlocked(bool value) {
-  _builder.setDataField<bool>(
-      ::capnp::bounded<328>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getOncomingCount() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<42>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getOncomingCount() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<42>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setOncomingCount( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<42>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getPrecedingCount() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<43>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getPrecedingCount() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<43>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setPrecedingCount( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<43>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Reader::getCandidateCount() const {
-  return _reader.getDataField< ::uint8_t>(
-      ::capnp::bounded<44>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint8_t StarPilotCarState::LightState::Builder::getCandidateCount() {
-  return _builder.getDataField< ::uint8_t>(
-      ::capnp::bounded<44>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setCandidateCount( ::uint8_t value) {
-  _builder.setDataField< ::uint8_t>(
-      ::capnp::bounded<44>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getHbaClearForS() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getHbaClearForS() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHbaClearForS(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<12>() * ::capnp::ELEMENTS, value);
-}
-
-inline  ::uint32_t StarPilotCarState::LightState::Reader::getHbaFrameId() const {
-  return _reader.getDataField< ::uint32_t>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
-}
-
-inline  ::uint32_t StarPilotCarState::LightState::Builder::getHbaFrameId() {
-  return _builder.getDataField< ::uint32_t>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHbaFrameId( ::uint32_t value) {
-  _builder.setDataField< ::uint32_t>(
-      ::capnp::bounded<13>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getWideFrameAgeMs() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getWideFrameAgeMs() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setWideFrameAgeMs(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<14>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getNarrowFrameAgeMs() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getNarrowFrameAgeMs() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setNarrowFrameAgeMs(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<15>() * ::capnp::ELEMENTS, value);
-}
-
-inline float StarPilotCarState::LightState::Reader::getHbaProcessingMs() const {
-  return _reader.getDataField<float>(
-      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
-}
-
-inline float StarPilotCarState::LightState::Builder::getHbaProcessingMs() {
-  return _builder.getDataField<float>(
-      ::capnp::bounded<16>() * ::capnp::ELEMENTS);
-}
-inline void StarPilotCarState::LightState::Builder::setHbaProcessingMs(float value) {
-  _builder.setDataField<float>(
-      ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+inline bool StarPilotCarState::Reader::hasSteeringLimitInfo() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::Builder::hasSteeringLimitInfo() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Reader StarPilotCarState::Reader::getSteeringLimitInfo() const {
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::get(_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Builder StarPilotCarState::Builder::getSteeringLimitInfo() {
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::get(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+#if !CAPNP_LITE
+inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Pipeline StarPilotCarState::Pipeline::getSteeringLimitInfo() {
+  return  ::cereal::StarPilotCarControl::SteeringLimitInfo::Pipeline(_typeless.getPointerField(6));
+}
+#endif  // !CAPNP_LITE
+inline void StarPilotCarState::Builder::setSteeringLimitInfo( ::cereal::StarPilotCarControl::SteeringLimitInfo::Reader value) {
+  ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::set(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), value);
+}
+inline  ::cereal::StarPilotCarControl::SteeringLimitInfo::Builder StarPilotCarState::Builder::initSteeringLimitInfo() {
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::init(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::Builder::adoptSteeringLimitInfo(
+    ::capnp::Orphan< ::cereal::StarPilotCarControl::SteeringLimitInfo>&& value) {
+  ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::adopt(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::cereal::StarPilotCarControl::SteeringLimitInfo> StarPilotCarState::Builder::disownSteeringLimitInfo() {
+  return ::capnp::_::PointerHelpers< ::cereal::StarPilotCarControl::SteeringLimitInfo>::disown(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
 }
 
 inline  ::uint16_t StarPilotCarState::ToyotaCruise::Reader::getVersion() const {

@@ -13,7 +13,7 @@ from types import SimpleNamespace as NS
 from threading import Event, Thread
 from unittest.mock import Mock
 
-import pyray as rl
+from openpilot.starpilot.ui.raylib import rl
 import pytest
 
 from openpilot.selfdrive.ui.layouts.arabesque.tools import browser, browser_session as runtime
@@ -741,6 +741,13 @@ def test_offer_starts_no_worker_and_later_survives_sleep_until_new_open(tool, ch
     assert fresh._offer and fresh._session is None
   finally:
     fresh.hide_event()
+
+
+def test_display_repair_starts_without_an_update_offer(tool):
+  tool.setup.inspect.return_value = {'action': 'update', 'repair': True, 'target': {}}
+  tool.view.show_event()
+  assert tool.view._offer is None
+  assert tool.sessions[0].operation == 'update'
 
 
 @pytest.mark.parametrize('choice', ['update', 'later'])

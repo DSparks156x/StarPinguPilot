@@ -122,6 +122,9 @@ def stock_lateral_off(cp, cs, native, *, allow_independent_cancel=False, allow_i
 
   from openpilot.starpilot.car.toyota.aol import qualified as toyota_qualified
 
+  from opendbc.car.gm.aol import qualified_gm
+
+  gm_stock_gas = bool(cp.brand == 'gm' and qualified_gm(cp) and cp.pcmCruise and not cp.openpilotLongitudinalControl)
   independent_angle = angle_qualified(cp, marked_only=True)
   independent_brake = independent_angle or (allow_independent_brake and (
     toyota_qualified(cp, marked_only=True) and not cs.cruiseState.enabled or
@@ -132,7 +135,7 @@ def stock_lateral_off(cp, cs, native, *, allow_independent_cancel=False, allow_i
     not cs.accFaulted and not cs.doorOpen and not cs.seatbeltUnlatched and
     (not cs.brakePressed or independent_brake and allow_independent_brake) and
     not cs.regenBraking and (not cs.gasPressed or independent_angle or
-      allow_independent_gas and (toyota_qualified(cp, marked_only=True) or
+      allow_independent_gas and (gm_stock_gas or toyota_qualified(cp, marked_only=True) or
         cp.brand == 'hyundai' and stock_canfd_qualified(cp, marked_only=True))) and
     (not physical_cancel(cs, cp) or independent_angle and allow_independent_cancel) and
     native is not None and native.requestedLateral and native.lateralAllowed and not native.requestedLongitudinal)
@@ -162,6 +165,7 @@ class AvailabilityPause:
         self.baseline_ns = 0
         return False
       if source_expired:
+        # Retain intent under its original 200ms lease, never a renewed command.
         latest = companion.latest
         raw = latest[2] if latest is not None and latest[1] else None
         verified = companion.verified_sm_projection
@@ -178,7 +182,7 @@ class AvailabilityPause:
           not 0 < raw.carStateLogMonoTime <= now_ns or raw.observedMonoTime > now_ns or
           now_ns - raw.carStateLogMonoTime > SAFETY_MAX_AGE_NS or
           (int(sm.logMonoTime['aolIntentWire']) != raw.carStateLogMonoTime and not projection) or
-          not sm.seen['aolIntentWire'] or not sm.valid['aolIntentWire'] or not sm.alive['aolIntentWire']):
+          not sm.seen['aolIntentWire'] or not sm.valid['aolIntentWire']):
           self.active = False
           return False
       inventory = (healthy.pandaSerial, tuple(p.hardwareSerial for p in healthy.pandaInventory))
@@ -224,6 +228,9 @@ class TransportPause:
     context_current = bool(cp_identity(cp) == self.cp and session == self.session and model_ready and companion is not None)
     if context_current:
       self.observed_native = _healthy_transport_native(sm, cp, cs, session, now_ns, native)
+      if self.observed_native is None and cp.brand == 'ford':
+        from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+        self.observed_native = healthy_gas_transport_native(sm, cp, cs, session, now_ns)
     eligible = bool(context_current and not hard_fault and self.observed_native is not None)
     latest = companion.latest if companion is not None else None
     raw = decode_intent(sm['aolIntentWire']) if sm.seen.get('aolIntentWire', False) else None
@@ -304,13 +311,12 @@ class TransportPauseFeedback:
     from opendbc.car import structs
     from opendbc.car.ford.values import CAR
     from opendbc.car.ford.aol import qualified as ford_qualified
-    from openpilot.starpilot.car.ford.aol import early_native_long_withdrawal_supported
-    first_long = early_native_long_withdrawal_supported(cp) or (ford_qualified(cp, marked_only=True) and
-      cp.openpilotLongitudinalControl and cp.carFingerprint == CAR.FORD_MUSTANG_MACH_E_MK1)
+    first_long = (ford_qualified(cp, marked_only=True) and cp.openpilotLongitudinalControl and
+      cp.carFingerprint == CAR.FORD_MUSTANG_MACH_E_MK1)
     pending_ack = str(axis.mode) == 'off' and not axis.lateralActive
     if (not first_long or not latched or self.failed or self.paused or
       self.pending_event or self.retention_started_ns or self.source_retention_started_ns or
-      self.lateral_baseline_ns or not self.session or str(axis.sessionId) != self.session or
+      not self.session or str(axis.sessionId) != self.session or
       not producer or str(axis.intentProducerSessionId) != producer or int(axis.intentIntegrityEpoch) < 0 or
       self.signature is None or self.signature[14:16] != (producer, int(axis.intentIntegrityEpoch)) or
       str(axis.faultReason) != 'none' or not (pending_ack or str(axis.mode) == 'lateralOnly' and axis.lateralActive) or
@@ -328,8 +334,8 @@ class TransportPauseFeedback:
       any(event.immediateDisable or event.softDisable or event.userDisable for event in sm['onroadEvents'])):
       return None
     native = independent_lateral_health(sm, cp, cs, self.session, now_ns)
-    # Pre-ACK newer actual 10Hz LAT grant: intent only, never denied LONG.
-    if (native is None or pending_ack and native.observedMonoTime <= axis.observedMonoTime or
+    # The 10Hz LAT grant may precede a newer waiting-axis message; retain only intent.
+    if (native is None or native.observedMonoTime < max(self.healthy_native_ns, self.lateral_native_ns) or
         not native.pandaInventory or not native.requestedLongitudinal or native.longitudinalAllowed or
         self.healthy_inventory != (native.pandaSerial, tuple(slot.hardwareSerial for slot in native.pandaInventory))):
       return None
@@ -343,20 +349,17 @@ class TransportPauseFeedback:
     from openpilot.starpilot.car.hyundai.aol import qualified_ccnc_long_aol as ev9_qualified
     from opendbc.car import structs
     ev9 = cp.brand == 'hyundai' and ev9_qualified(cp, marked_only=True)
-    from openpilot.starpilot.car.ford.aol import early_native_long_withdrawal_supported as ford_early_long
     from opendbc.car.ford.aol import qualified as ford_qualified
-    from opendbc.car.ford.values import CAR
     # Before 10Hz LONG echo: physical pedal/cancel retains only real independent LAT intent.
     ford_withdrawal = bool(cp.brand == 'ford' and ford_qualified(cp, marked_only=True) and cp.openpilotLongitudinalControl and
       (cs.brakePressed or not cs.cruiseState.enabled or physical_cancel(cs, cp) or
-       not axis.desiredLongitudinal and not axis.longitudinalActive) and not (cs.brakePressed and cs.gasPressed) and not cs.regenBraking and
+       not axis.desiredLongitudinal and not axis.longitudinalActive) and not cs.regenBraking and
       cs.cruiseState.available and not cs.doorOpen and not cs.seatbeltUnlatched and
       not cs.vehicleSensorsInvalid and cs.gearShifter == structs.CarState.GearShifter.drive)
-    # Mach-E angle/curvature share native independent axes: intent-only 10Hz LONG withdrawal/recovery echo join.
+    # Ford angle/curvature share native independent axes: intent-only 10Hz LONG withdrawal/recovery echo join.
     # Fresh LAT grant; all health/fault checks required.
-    ford_mache_long = bool(ford_qualified(cp, marked_only=True) and cp.openpilotLongitudinalControl and
-      cp.carFingerprint == CAR.FORD_MUSTANG_MACH_E_MK1)
-    early_long = gm or cp.brand == 'hyundai' and early_native_long_withdrawal_supported(cp) or ev9 or ford_early_long(cp) or ford_withdrawal or ford_mache_long
+    ford_long = bool(ford_qualified(cp, marked_only=True) and cp.openpilotLongitudinalControl)
+    early_long = gm or cp.brand == 'hyundai' and early_native_long_withdrawal_supported(cp) or ev9 or ford_withdrawal or ford_long
     from openpilot.starpilot.car.gm.aol import f1_conventional_lateral_owner, gm_physical_pedal_withdrawal
     gm_pedal = gm_physical_pedal_withdrawal(cp, cs) and not f1_conventional_lateral_owner(cp)
     event_ns = int(sm.logMonoTime['onroadEvents'])
@@ -479,6 +482,9 @@ class TransportPauseFeedback:
     native = _configured_transport_native(sm, cp, self.session, now_ns,
       allow_restricted_lateral=withdrawn or axis_first or repeated_join or bool(cs.steerFaultTemporary),
       require_longitudinal=not (withdrawn or axis_first or repeated_join))
+    if native is None and active_join and cp.brand == 'ford':
+      from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+      native = healthy_gas_transport_native(sm, cp, cs, self.session, now_ns)
     if (native is None or not native.pandaInventory or
         (native.pandaSerial, tuple(slot.hardwareSerial for slot in native.pandaInventory)) != self.lateral_inventory or
         native.observedMonoTime < self.lateral_native_ns or
@@ -535,11 +541,12 @@ class TransportPauseFeedback:
 
     # PCM-off != AOL toggle: after output withdrawal retain prior intent only for
     # location faults/matched EPS recovery; native/session/source checks remain.
-    stock_angle = cp.brand == 'hyundai' and angle_qualified(cp, marked_only=True)
-    stock_hkg = cp.brand == 'hyundai' and (stock_angle or stock_canfd_qualified(cp, marked_only=True) or
+    recovering_user = bool((location_fault or eps_recovery) and users)
+    stock_angle = recovering_user and cp.brand == 'hyundai' and angle_qualified(cp, marked_only=True)
+    stock_hkg = recovering_user and cp.brand == 'hyundai' and (stock_angle or stock_canfd_qualified(cp, marked_only=True) or
       stock_classic_qualified(cp, marked_only=True))
-    stock_user = stock_lateral_user_event(cp)
-    stock_temporary_user = bool((location_fault or eps_recovery) and (stock_hkg or cp.brand == 'chrysler' and chrysler_qualified(cp, marked_only=True) or
+    stock_user = stock_lateral_user_event(cp) if recovering_user else None
+    stock_temporary_user = bool(recovering_user and (stock_hkg or cp.brand == 'chrysler' and chrysler_qualified(cp, marked_only=True) or
       cp.brand == 'ford' and ford_qualified(cp, marked_only=True) or cp.brand == 'nissan' and nissan_qualified(cp, marked_only=True)
       or cp.brand == 'subaru' and subaru_qualified(cp, marked_only=True)
       or cp.brand == 'mazda' and mazda_qualified(cp, marked_only=True)
@@ -549,7 +556,7 @@ class TransportPauseFeedback:
       cs.cruiseState.available and not cs.cruiseState.enabled and
       cs.gearShifter in (gears.drive, gears.low, gears.sport, gears.brake) and
       not cs.doorOpen and (not cs.seatbeltUnlatched or belt_eps_recovery) and not cs.brakePressed and not cs.regenBraking and
-      (not cs.gasPressed or stock_angle) and
+      (not cs.gasPressed or stock_angle or eps_recovery and stock_canfd_qualified(cp, marked_only=True)) and
       all(event.name == stock_user and not event.softDisable and
           not event.immediateDisable for event in users))
     from openpilot.starpilot.car.ford.aol import temporary_eps_pedal_recovery
@@ -659,6 +666,9 @@ class TransportPauseFeedback:
     if not policy_for(cp).intent_supported:
       return False
     native = _healthy_transport_native(sm, cp, cs, self.session, now_ns)
+    if native is None and cp.brand == 'ford':
+      from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+      native = healthy_gas_transport_native(sm, cp, cs, self.session, now_ns)
     if (native is None or not native.pandaInventory or
         held_original and not (native.requestedLateral and native.lateralAllowed) or
         native.observedMonoTime < self.lateral_native_ns or
@@ -749,152 +759,9 @@ class TransportPauseFeedback:
       self.lateral_inventory==(native.pandaSerial,tuple(p.hardwareSerial for p in native.pandaInventory)))
 
   def _temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns, *, latched, producer, signature):
-    if (not latched or self.failed or self.paused or self.retention_started_ns or
-      not self.session or str(axis.sessionId) != self.session or not cs.steerFaultTemporary or
-      cs.steerFaultPermanent or not cs.canValid or cs.canTimeout or
-      str(axis.faultReason) != 'none' or
-      not producer or producer != self.availability_producer or
-      str(getattr(axis, 'intentProducerSessionId', '')) != producer or
-      int(getattr(axis, 'intentIntegrityEpoch', 0)) != self.availability_epoch or
-      not self.lateral_baseline_ns or not self.lateral_inventory or
-      not 0 < axis.sourceCarStateMonoTime <= stamp <= now_ns or
-      now_ns - axis.sourceCarStateMonoTime > AXIS_MAX_AGE_NS):
-      return False
-    withdrawn = not axis.desiredLateral and not axis.lateralActive
-    previous = self.signature
-    pending = bool(self.pending_event)
-    all_off = bool(withdrawn and not axis.desiredLongitudinal and not axis.longitudinalActive and str(axis.mode) == 'off')
-    event_ns = int(sm.logMonoTime['onroadEvents'])
-    same_longitudinal = bool(previous is not None and
-      (axis.longitudinalActive, axis.desiredLongitudinal) == (previous[10], previous[12]))
-    withdrawal_role = bool(all_off or withdrawn and same_longitudinal and
-      (cs.steeringPressed or self.temporary_eps_event_ns and previous is not None and not previous[9] and not previous[11]))
-    if pending and (not withdrawal_role or previous is None or previous[5] != 'none' or
-      previous[0] != self.session or previous[7] != self.session or
-      previous[1] != self.sequence or previous[6] not in (self.pending_event, self.temporary_eps_event_ns) or
-      previous[9] or previous[11] or not same_longitudinal or
-      previous[14] != producer or previous[15] != self.availability_epoch or
-      axis.faultEventMonoTime not in (self.pending_event, self.temporary_eps_event_ns) or
-      max(axis.faultEventMonoTime, event_ns) != self.pending_event or
-      axis.sourceCarStateMonoTime < previous[8] or stamp < previous[2] or
-      not 0 < self.pending_event <= now_ns or now_ns - self.pending_event > AXIS_MAX_AGE_NS):
-      return False
-    # Prior ACTIVE identity in first temporary-EPS Card cycle: original source/output lease only;
-    # No permission-deadline/baseline renewal.
-    fresh_active_successor = bool(previous is not None and axis.sequence > self.sequence and
-      previous[5] == 'none' and previous[9] and previous[11] and previous[13] and
-      previous[6] == axis.faultEventMonoTime and previous[14] == producer and
-      previous[15] == self.availability_epoch and
-      axis.sourceCarStateMonoTime >= previous[8] and stamp >= previous[2] and
-      0 < previous[8] <= previous[2] <= now_ns <= previous[4] and
-      now_ns - previous[8] <= AXIS_MAX_AGE_NS and
-      0 < self.lateral_source_ns <= now_ns and
-      now_ns - self.lateral_source_ns <= AXIS_MAX_AGE_NS)
-    held_original = bool(axis.desiredLateral and axis.lateralActive and axis.nativeAcknowledged and
-      (signature == previous or fresh_active_successor))
-    if not withdrawn and not held_original:
-      return False
-    stock_user = stock_lateral_user_event(cp)
-    stock_eps_user = bool(self.lateral_only_baseline and cp.pcmCruise and
-      not axis.desiredLongitudinal and not axis.longitudinalActive and not cs.steeringDisengage and
-      cs.cruiseState.available and not cs.cruiseState.enabled and stock_user is not None and
-      any(event.name == stock_user and event.userDisable for event in sm['onroadEvents']))
-    # Seatbelt blocks normal LONG, not admitted LAT intent. Keep warnings/native/output checks.
-    events = tuple(event for event in sm['onroadEvents'] if not (
-      stock_eps_user and event.name == stock_user and event.userDisable and
-      not event.softDisable and not event.immediateDisable) and not (
-      self.lateral_only_baseline and cs.seatbeltUnlatched and not axis.desiredLongitudinal and
-      not axis.longitudinalActive and event.name == log.OnroadEvent.EventName.seatbeltNotLatched and
-      event.softDisable and event.noEntry and not event.immediateDisable and not event.userDisable))
-    temporary_names = (log.OnroadEvent.EventName.steerTempUnavailable,
-      log.OnroadEvent.EventName.steerTempUnavailableSilent)
-    if (not sm.seen['onroadEvents'] or not sm.valid['onroadEvents'] or not sm.alive['onroadEvents'] or
-        not 0 < event_ns <= now_ns or now_ns - event_ns > 1_500_000_000 or
-        any(event.immediateDisable or event.softDisable and event.name != temporary_names[0] for event in events) or
-        pending and any(event.userDisable for event in events)):
-      return False
-    temporary_event = any(event.name in temporary_names for event in events)
-    override_temporary = bool((cs.steeringPressed or 0 < event_ns == self.temporary_eps_event_ns) and not temporary_event and
-      any(event.name == log.OnroadEvent.EventName.steerOverride for event in events) and
-      not any(event.softDisable or event.userDisable for event in events))
-    matched_withdrawal = bool((temporary_event or override_temporary) and axis.faultEventMonoTime == event_ns <= stamp)
-    original_active = bool(previous is not None and previous[0] == self.session and
-      previous[7] == self.session and previous[5] == 'none' and
-      previous[9] and previous[11] and previous[13] and previous[6] == event_ns and
-      axis.sourceCarStateMonoTime >= previous[8] and stamp >= previous[2] and
-      previous[14] == producer and previous[15] == self.availability_epoch and
-      0 < self.lateral_source_ns <= previous[8] <= previous[2] <= now_ns <= previous[4] and
-      now_ns - previous[8] <= AXIS_MAX_AGE_NS)
-    repeated_join = bool(self.temporary_eps_event_ns and previous is not None and withdrawn and
-      not previous[9] and not previous[11] and same_longitudinal and
-      previous[6] == self.temporary_eps_event_ns and (temporary_event or override_temporary) and
-      axis.faultEventMonoTime != event_ns and
-      min(axis.faultEventMonoTime, event_ns) == self.temporary_eps_event_ns and
-      0 < max(axis.faultEventMonoTime, event_ns) <= now_ns and
-      now_ns - max(axis.faultEventMonoTime, event_ns) <= AXIS_MAX_AGE_NS)
-    pending_withdrawal = bool(withdrawal_role and not any(event.softDisable or event.userDisable for event in events) and
-      not temporary_event and 0 < event_ns < axis.faultEventMonoTime <= stamp and
-      now_ns - axis.faultEventMonoTime <= AXIS_MAX_AGE_NS and
-      (pending or original_active and axis.sequence > self.sequence))
-    if withdrawn and not (matched_withdrawal or pending_withdrawal or repeated_join):
-      return False
-    if held_original and not (
-        axis.faultEventMonoTime == event_ns <= stamp and not any(event.softDisable for event in events) or
-        (temporary_event or override_temporary) and 0 < axis.faultEventMonoTime < event_ns and
-        now_ns - event_ns <= AXIS_MAX_AGE_NS):
-      return False
-    # Intent only: temporary EPS still blocks transport/availability health proofs.
-    from openpilot.starpilot.car.nissan.aol import temporary_eps_restriction
-    from openpilot.starpilot.car.ford.aol import temporary_eps_restriction as ford_temporary_eps_restriction
-    stock_ford_eps = bool(ford_temporary_eps_restriction(cp, cs) and
-      all(not event.userDisable or event.name in (log.OnroadEvent.EventName.pcmDisable,
-          log.OnroadEvent.EventName.pedalPressed) and not event.softDisable and not event.immediateDisable for event in events))
-    from opendbc.car import structs
-    from opendbc.car.mazda.stock_aol import qualified as mazda_qualified
-    stock_mazda_eps = bool(mazda_qualified(cp, marked_only=True) and
-      cs.cruiseState.available and not cs.cruiseState.enabled and
-      cs.gearShifter == structs.CarState.GearShifter.drive and
-      not cs.brakePressed and not cs.regenBraking and not cs.gasPressed and
-      not cs.doorOpen and not cs.accFaulted and
-      not cs.vehicleSensorsInvalid and not cs.steeringDisengage and not cs.buttonEvents and
-      all(not event.userDisable or event.name == log.OnroadEvent.EventName.pcmDisable and
-          not event.softDisable and not event.immediateDisable for event in events))
-    from opendbc.car.rivian.stock_aol import temporary_eps_restriction as rivian_temporary_eps_restriction
-    stock_rivian_eps = bool(rivian_temporary_eps_restriction(cp, cs) and
-      all(not event.userDisable or event.name == log.OnroadEvent.EventName.pcmDisable and
-          not event.softDisable and not event.immediateDisable for event in events))
-    from openpilot.starpilot.car.volkswagen.aol import temporary_eps_restriction as volkswagen_temporary_eps_restriction
-    stock_volkswagen_eps = bool(volkswagen_temporary_eps_restriction(cp, cs) and
-      all(not event.userDisable or event.name == log.OnroadEvent.EventName.pcmDisable and
-          not event.softDisable and not event.immediateDisable for event in events))
-    restricted_eps = bool((temporary_eps_restriction(cp, cs) or stock_ford_eps or stock_mazda_eps or stock_rivian_eps or
-                          stock_volkswagen_eps) and self.lateral_only_baseline and
-      not axis.desiredLongitudinal and not axis.longitudinalActive)
-    native = _configured_transport_native(sm, cp, self.session, now_ns, allow_restricted_lateral=restricted_eps)
-    if (native is None or not native.pandaInventory or
-        stock_eps_user and (native.requestedLongitudinal or native.longitudinalAllowed) or
-        held_original and not (native.requestedLateral and (native.lateralAllowed or
-          restricted_eps and not native.requestedLongitudinal and not native.longitudinalAllowed)) or
-        axis.longitudinalActive and not native.longitudinalAllowed or
-        native.observedMonoTime < self.lateral_native_ns or
-        (native.pandaSerial, tuple(p.hardwareSerial for p in native.pandaInventory)) != self.lateral_inventory):
-      return False
-    if stock_volkswagen_eps and matched_withdrawal:
-      self.volkswagen_eps_source_ns = int(axis.sourceCarStateMonoTime)
-    if cs.steerFaultTemporary and matched_withdrawal:
-      self.temporary_eps_event_ns = int(axis.faultEventMonoTime)
-      if cp.brand == 'ford':
-        # Prior gas: accepted event receipt, not newer other-socket CS release.
-        self.temporary_eps_gas_override = any(
-          event.name == log.OnroadEvent.EventName.gasPressedOverride for event in events)
-    if pending_withdrawal or repeated_join:
-      # Exact physical-EPS join: intent only; newer/duplicate proofs cannot reanchor.
-      if not pending:
-        self.pending_event = max(int(axis.faultEventMonoTime), event_ns)
-      self.awaiting = True
-    elif pending:
-      self.pending_event = 0
-    return True
+    from openpilot.starpilot.aol.temporary_steering import temporary_steering_intent_current
+    return temporary_steering_intent_current(self, sm, cp, cs, axis, stamp, now_ns,
+      latched=latched, producer=producer, signature=signature)
 
   def _honda_brake_lateral_current(self, sm, cp, cs, axis, now_ns, *, latched, brake_source_ns):
     from opendbc.car.honda.stock_aol import qualified
@@ -993,6 +860,9 @@ class TransportPauseFeedback:
         not axis.lateralActive and not axis.longitudinalActive)):
       return False
     native = _healthy_transport_native(sm, cp, cs, str(axis.sessionId), now_ns)
+    if native is None and cp.brand == 'ford':
+      from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+      native = healthy_gas_transport_native(sm, cp, cs, self.session, now_ns)
     if (native is None or not native.requestedLateral or not native.lateralAllowed or
         native.observedMonoTime < self.lateral_native_ns or
         (native.pandaSerial, tuple(p.hardwareSerial for p in native.pandaInventory)) != self.lateral_inventory):
@@ -1003,11 +873,15 @@ class TransportPauseFeedback:
     toyota_pedal = bool(toyota_qualified(cp, marked_only=True) and cs.brakePressed != cs.gasPressed and
       not cs.regenBraking and self.lateral_only_baseline and
       not native.requestedLongitudinal and not native.longitudinalAllowed)
+    from opendbc.car.gm.aol import qualified_gm
+    gm_stock_gas = bool(cp.brand == 'gm' and qualified_gm(cp) and cp.pcmCruise and not cp.openpilotLongitudinalControl and
+      cs.gasPressed and not cs.brakePressed and not cs.regenBraking and self.lateral_only_baseline and
+      not native.requestedLongitudinal and not native.longitudinalAllowed)
     stock_user = stock_lateral_user_event(cp)
     stock_lateral = bool(reason == 'availabilityPause' and axis.sourceCarStateMonoTime == 0 and
       not axis.lateralActive and not axis.longitudinalActive and not axis.desiredLongitudinal and
       stock_lateral_off(cp, cs, native, allow_independent_brake=toyota_pedal,
-                        allow_independent_gas=toyota_pedal and cs.gasPressed) and previous is not None and
+                        allow_independent_gas=gm_stock_gas or toyota_pedal and cs.gasPressed) and previous is not None and
       previous[0] == self.session and previous[7] == self.session and
       previous[14] == intent_producer_session and previous[15] == self.availability_epoch and
       (previous[11] and not previous[12] and previous[13] and not previous[10] and
@@ -1032,8 +906,8 @@ class TransportPauseFeedback:
         toyota_pedal and event.name == log.OnroadEvent.EventName.pedalPressed) and
         event.userDisable and not event.softDisable and not event.immediateDisable)]
     if cp.brand == 'gm':
-      from openpilot.starpilot.car.gm.aol import sdgm_lateral_pedal_source_zero
-      if sdgm_lateral_pedal_source_zero(self, cp, cs, axis, native, now_ns,
+      from openpilot.starpilot.car.gm.aol import gm_lateral_pedal_source_zero
+      if gm_lateral_pedal_source_zero(self, cp, cs, axis, native, now_ns,
           producer=intent_producer_session):
         events = [event for event in events if not (event.name == log.OnroadEvent.EventName.pedalPressed and
           event.userDisable and not event.softDisable and not event.immediateDisable)]
@@ -1139,9 +1013,27 @@ class TransportPauseFeedback:
     return qualified_ioniq6(cp)
 
   def _source_availability_retention(self, sm, cp, cs, axis, stamp, now_ns, *, latched, continuity, producer, signature):
-    held = bool(signature == self.signature and not self.retention_started_ns)
+    previous = self.signature
+    gas_source = gas_lag = False
+    if (cp.brand == 'ford' and previous is not None and previous[14:16] == signature[14:16] and
+        (signature == previous or signature[1] > self.sequence and stamp > previous[2]) and
+        signature[8] == previous[8] == self.lateral_source_ns and
+        AXIS_MAX_AGE_NS < now_ns - signature[8] <= SAFETY_MAX_AGE_NS):
+      active = bool(previous[5] == 'none' and previous[9] and not previous[10] and previous[11] and
+        previous[12] and previous[13] and axis.desiredLateral and axis.lateralActive and
+        axis.nativeAcknowledged and not axis.longitudinalActive)
+      paused = bool(self.ordinary_warning_retained and previous[5] == signature[5] == 'availabilityPause' and
+        not any(previous[9:14]) and not any(signature[9:14]) and previous[6] == signature[6])
+      if active or paused:
+        from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+        gas_native = healthy_gas_transport_native(sm, cp, cs, self.session, now_ns)
+        gas_source = bool(gas_native is not None and gas_native.requestedLateral and gas_native.lateralAllowed and
+          gas_native.observedMonoTime >= self.lateral_native_ns and
+          (gas_native.pandaSerial, tuple(p.hardwareSerial for p in gas_native.pandaInventory)) == self.lateral_inventory)
+        gas_lag = gas_source and paused
+    held = bool((signature == self.signature or gas_source) and not self.retention_started_ns)
     output_missing = not (sm.seen['aolAxisState'] and sm.valid['aolAxisState'] and sm.alive['aolAxisState'])
-    matched_lag = bool((str(axis.faultReason) == 'critical' or
+    matched_lag = gas_lag or bool((str(axis.faultReason) == 'critical' or
       str(axis.faultReason) == 'availabilityPause' and self.ordinary_warning_retained) and signature == self.signature and
       self.lateral_only_baseline and not self.failed and not self.pending_event and
       signature[0] == self.session and signature[7] == self.session and signature[1] == self.sequence and
@@ -1160,7 +1052,7 @@ class TransportPauseFeedback:
       not 0 <= axis.validUntilMonoTime - stamp <= AXIS_MAX_AGE_NS or
       now_ns - axis.sourceCarStateMonoTime > SAFETY_MAX_AGE_NS or
       not (stamp - axis.sourceCarStateMonoTime > AXIS_MAX_AGE_NS or now_ns > axis.validUntilMonoTime or
-           held and output_missing) or
+           held and output_missing or gas_source) or
       not producer or getattr(axis, 'intentProducerSessionId', '') != producer or
       producer != self.availability_producer or
       int(getattr(axis, 'intentIntegrityEpoch', 0)) != self.availability_epoch):
@@ -1177,6 +1069,9 @@ class TransportPauseFeedback:
     events = sm['onroadEvents']
     faults = [e for e in events if e.immediateDisable or e.softDisable]
     users = [e for e in events if e.userDisable]
+    gas_lag_event = bool(gas_lag and len(faults) == 1 and
+      faults[0].name == log.OnroadEvent.EventName.selfdrivedLagging and faults[0].softDisable and
+      not faults[0].immediateDisable and host_source_availability_only(events) and event_ns == axis.faultEventMonoTime)
     stock_user = stock_lateral_user_event(cp)
     nominal_users = bool(stock_user is not None and users and all(e.name == stock_user and
       not e.softDisable and not e.immediateDisable for e in users))
@@ -1191,10 +1086,13 @@ class TransportPauseFeedback:
       0 < axis.faultEventMonoTime < self.retention_event_ns)
     if (not sm.seen['onroadEvents'] or not sm.valid['onroadEvents'] or not sm.alive['onroadEvents'] or
         not 0 < event_ns <= now_ns or now_ns - event_ns > 1_500_000_000 or
-        bool(faults) and not stock_event_first or stock_pending and not stock_event_first or
-        matched_lag and not stock_event_first):
+        bool(faults) and not stock_event_first and not gas_lag_event or stock_pending and not stock_event_first or
+        matched_lag and not stock_event_first and not gas_lag_event):
       return False
     native = _healthy_transport_native(sm, cp, cs, self.session, now_ns)
+    if native is None and held and cp.brand == 'ford':
+      from openpilot.starpilot.car.ford.gas_override import healthy_gas_transport_native
+      native = healthy_gas_transport_native(sm, cp, cs, self.session, now_ns)
     inactive_native = bool(held and self.source_retention_started_ns and native is not None and
       not native.requestedLateral and not native.lateralAllowed and
       not native.requestedLongitudinal and not native.longitudinalAllowed)
@@ -1442,8 +1340,9 @@ class TransportPauseFeedback:
           self.temporary_host_qualified = True
           return False
       if cp.brand == 'ford' and latched:
-        from openpilot.starpilot.car.ford.command_pause import retain_command_pause_intent
-        if retain_command_pause_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session):
+        from openpilot.starpilot.car.ford.command_pause import retain_command_pause_intent, retain_gear_withdrawal_intent
+        if (retain_command_pause_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session) or
+            retain_gear_withdrawal_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session)):
           return False
       if (cp.brand == 'chrysler' and current and continuity and latched and
           not self.failed and not self.ever_lateral_active):
@@ -1540,6 +1439,10 @@ class TransportPauseFeedback:
           self._ford_gas_release_eps_join_current(sm, cp, cs, axis, stamp, now_ns,
             latched=latched, producer=intent_producer_session)):
         return False
+      if cp.brand == 'ford' and current and continuity:
+        from openpilot.starpilot.car.ford.physical_pause import retain_physical_pause_intent
+        if retain_physical_pause_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session):
+          return False
       if current and continuity and self._temporary_steering_intent_current(sm, cp, cs, axis, stamp, now_ns,
           latched=latched, producer=intent_producer_session, signature=signature):
         self.sequence, self.signature = int(axis.sequence), signature
@@ -1587,12 +1490,9 @@ class TransportPauseFeedback:
           return False
       if cp.brand == 'ford' and current and continuity:
         from openpilot.starpilot.car.ford.reverse_intent import retain_reverse_intent
-        from openpilot.starpilot.car.ford.physical_pause import retain_physical_pause_intent
         from openpilot.starpilot.car.ford.gas_override import retained_gas_lateral_native
 
         if retain_reverse_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session):
-          return False
-        if retain_physical_pause_intent(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session):
           return False
         gas_native = retained_gas_lateral_native(self, sm, cp, cs, axis, now_ns, latched=latched, producer=intent_producer_session)
         if gas_native is not None:
@@ -1641,7 +1541,8 @@ class TransportPauseFeedback:
       native = _healthy_transport_native(sm, cp, cs, str(axis.sessionId), now_ns)
       if (native is None and intent_paused and cs.canValid and not cs.canTimeout and
           not cs.steerFaultPermanent and not any(signature[9:13])):
-        native = _configured_transport_native(sm, cp, str(axis.sessionId), now_ns)
+        native = _configured_transport_native(sm, cp, str(axis.sessionId), now_ns,
+          require_longitudinal=not (cp.brand == 'ford' and cs.brakePressed))
       from opendbc.car import structs
       previous = self.signature
       inactive = bool(not self.failed and self.session and previous is not None and
@@ -1664,7 +1565,9 @@ class TransportPauseFeedback:
              event.noEntry and not event.userDisable) and
             (not event.userDisable or event.name in
              (log.OnroadEvent.EventName.pcmDisable, log.OnroadEvent.EventName.buttonCancel,
-              log.OnroadEvent.EventName.reverseGear) or intent_paused and event.name == log.OnroadEvent.EventName.wrongGear)
+              log.OnroadEvent.EventName.reverseGear) or intent_paused and
+             (event.name == log.OnroadEvent.EventName.wrongGear or cp.brand == 'ford' and cs.brakePressed and
+              event.name == log.OnroadEvent.EventName.pedalPressed))
             for event in sm['onroadEvents']) and
         native is not None and native.pandaInventory and self.healthy_inventory ==
           (native.pandaSerial, tuple(slot.hardwareSerial for slot in native.pandaInventory)) and
@@ -1698,6 +1601,7 @@ class TransportPauseFeedback:
         from openpilot.starpilot.car.hyundai.aol import qualified_ccnc_long_aol
         if not cs.cruiseState.available and qualified_ccnc_long_aol(cp, marked_only=True):
           self.ccnc_main_off_source_ns = now_ns
+        self.source_retention_started_ns = 0
         self.lateral_baseline_ns = stamp
         self.lateral_source_ns = int(axis.sourceCarStateMonoTime)
         self.lateral_native_ns = int(lateral_native.observedMonoTime)

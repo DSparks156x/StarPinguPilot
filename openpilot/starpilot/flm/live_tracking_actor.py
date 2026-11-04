@@ -746,6 +746,14 @@ class LiveTrackingActor:
       self._advance_original_decoder(collector, now_ns)
       self._retire_identified_history(collector)
     if collector is None or source is None or not collector.ready or current_native is not True:
+      # Report the current missing input, not an earlier identity transition.
+      # Retaining historical work below still supplies no current permission.
+      self.reason = (
+        'controller_collection_required' if collector is None else
+        'current_settings_source_required' if source is None else
+        'qualified_control_output_pair_required' if not collector.ready else
+        'current_native_permission_unavailable'
+      )
       # A frozen response job describes ORIGINAL source/native observations,
       # not permission to apply a correction now. Temporary input/native gaps
       # must not cancel that computation after expensive snapshot preparation.
@@ -968,12 +976,24 @@ class LiveTrackingActor:
     validate_response_witness(offer.response_witness, self.certificate.binding, now_ns)
     if full_profile_sha256(self.certificate.binding.baseline_revision, dict(application.applied)) != offer.target_sha256:
       return False
+    optimizer = self.ingress.optimizer
+    previous = getattr(self.ingress, 'latest_restore_offer', None)
+    if previous is not None:
+      if (
+        (previous.binding, previous.history_scope, previous.history_trial_id, previous.target_sha256)
+        != (offer.binding, offer.history_scope, offer.history_trial_id, offer.target_sha256)
+        or optimizer.accepted != dict(application.applied)
+      ):
+        return False  # An old restoration cannot replace a later accepted tune.
+    else:
+      # Adopt history once per fresh ingress. Repeated current restore ACKs
+      # must not erase the new baseline or a subsequent independent trial.
+      optimizer.accepted = dict(application.applied)
+      optimizer.baseline.clear()
+      optimizer.offer_state = None
+      optimizer.future.clear()
     self.ingress.latest_restore_offer = offer
     self.application = application
-    self.ingress.optimizer.accepted = dict(application.applied)
-    self.ingress.optimizer.baseline.clear()
-    self.ingress.optimizer.offer_state = None
-    self.ingress.optimizer.future.clear()
     self.hold_restore(False)
     return True
 

@@ -278,7 +278,7 @@ class Compositor:
     self.context = HeadlessContext(width, height)
     self.resources.callback(self.context.close)
     try:
-      import pyray as rl
+      from openpilot.starpilot.ui.raylib import rl
       from openpilot.system.ui.lib.application import gui_app
       from openpilot.selfdrive.ui.ui_state import ui_state
       from openpilot.starpilot.ui.presentation import BitmapFonts, Profile, default_font_directory
@@ -509,7 +509,7 @@ class Compositor:
     # Preserve the subscriber to avoid repeated seeks while paused.
     self.camera.client = client
     self.camera.frame = frame
-    self.camera.available_streams = available
+    self.camera.available_streams = list(available)
     if client is not None and client.is_connected():
       self.camera._initialize_textures()
     pip_client = self.pip_stream._client

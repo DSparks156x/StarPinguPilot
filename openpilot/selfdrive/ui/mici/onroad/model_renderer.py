@@ -1,10 +1,8 @@
-import colorsys
 import math
 import numpy as np
-import pyray as rl
+from openpilot.starpilot.ui.raylib import rl
 from openpilot.cereal import log, messaging
 from opendbc.car.structs import car
-from dataclasses import dataclass, field
 from types import SimpleNamespace
 from openpilot.common.params import Params
 from openpilot.starpilot.ui.appearance_preferences import format_lead_info
@@ -22,6 +20,7 @@ from openpilot.system.ui.lib.application import FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
+from openpilot.selfdrive.ui.onroad.model_renderer import ModelGeometry, ModelPoints
 
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
@@ -48,10 +47,6 @@ LANE_LINE_COLORS = {
 }
 
 
-@dataclass
-class ModelPoints:
-  raw_points: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float32))
-  projected_points: np.ndarray = field(default_factory=lambda: np.empty((0, 2), dtype=np.float32))
 
 
 class LeadVehicle:
@@ -65,7 +60,7 @@ class LeadVehicle:
 
 
 
-class ModelRenderer(Widget):
+class ModelRenderer(ModelGeometry, Widget):
   def __init__(self):
     super().__init__()
     self._longitudinal_control = False
@@ -117,11 +112,6 @@ class ModelRenderer(Widget):
       cp = messaging.log_from_bytes(car_params, car.CarParams)
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
-  def set_transform(self, transform: np.ndarray):
-    transform = transform.astype(np.float32)
-    if not np.array_equal(transform, self._car_space_transform):
-      self._car_space_transform = transform
-      self._transform_dirty = True
 
   def render_with_lead(self, rect: rl.Rectangle, enabled: bool, info_mode: int = 0, metric: bool | None = None,
                        lateral_active: bool = False, paint: bool = True):
@@ -231,20 +221,6 @@ class ModelRenderer(Widget):
     except (AttributeError, TypeError, ValueError, OverflowError):
       return False
 
-  def _update_raw_points(self, model):
-    """Update raw 3D points from model data"""
-    self._path.raw_points = np.array([model.position.x, model.position.y, model.position.z], dtype=np.float32).T
-
-    # Older logs may append lane centers after the four boundaries.
-    for points, lane_line in zip(self._lane_lines, model.laneLines, strict=False):
-      points.raw_points = np.array([lane_line.x, lane_line.y, lane_line.z], dtype=np.float32).T
-
-    for i, road_edge in enumerate(model.roadEdges):
-      self._road_edges[i].raw_points = np.array([road_edge.x, road_edge.y, road_edge.z], dtype=np.float32).T
-
-    self._lane_line_probs = np.array(model.laneLineProbs, dtype=np.float32)
-    self._road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
-    self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
 
   def _update_leads(self, sm):
     plan = sm['longitudinalPlan']
@@ -356,7 +332,8 @@ class ModelRenderer(Widget):
     path_pts = self._path.projected_points + np.array([self._rect.x, self._rect.y], dtype=np.float32)
     max_len = min(len(path_pts) // 2, len(self._acceleration_x))
 
-    segment_colors = []
+    hues = []
+    saturations = []
     gradient_stops = []
 
     i = 0
@@ -371,23 +348,24 @@ class ModelRenderer(Widget):
       lin_grad_point = 1 - (track_y - self._rect.y) / self._rect.height
 
       # speed up: 120, slow down: 0
-      path_hue = np.clip(60 + self._acceleration_x[i] * 35, 0, 120)
+      path_hue = 60 + self._acceleration_x[i] * 35
 
       saturation = min(abs(self._acceleration_x[i] * 1.5), 1)
-      lightness = np.interp(saturation, [0.0, 1.0], [0.95, 0.62])
-      alpha = np.interp(lin_grad_point, [0.75 / 2.0, 0.75], [0.4, 0.0])
-
-      # Use HSL to RGB conversion
-      color = self._hsla_to_color(path_hue / 360.0, saturation, lightness, alpha)
-
+      hues.append(path_hue)
+      saturations.append(saturation)
       gradient_stops.append(lin_grad_point)
-      segment_colors.append(color)
 
       # Skip a point, unless next is last
       i += 1 + (1 if (i + 2) < max_len else 0)
 
-    # Store the gradient in the path object
-    self._exp_gradient.colors = segment_colors
+    if gradient_stops:
+      hues = np.clip(hues, 0, 120) / 360.0
+      lightness = np.interp(saturations, [0.0, 1.0], [0.95, 0.62])
+      alphas = np.interp(gradient_stops, [0.75 / 2.0, 0.75], [0.4, 0.0])
+      self._exp_gradient.colors = [self._hsla_to_color(h, s, l, a)
+                                   for h, s, l, a in zip(hues, saturations, lightness, alphas, strict=True)]
+    else:
+      self._exp_gradient.colors = []
     self._exp_gradient.stops = gradient_stops
 
 
@@ -619,27 +597,4 @@ class ModelRenderer(Widget):
       start = end
     return polygons
 
-  @staticmethod
-  def _hsla_to_color(h, s, l, a):
-    rgb = colorsys.hls_to_rgb(h, l, s)
-    return rl.Color(
-      int(rgb[0] * 255),
-      int(rgb[1] * 255),
-      int(rgb[2] * 255),
-      int(a * 255)
-    )
 
-  @staticmethod
-  def _blend_colors(begin_colors, end_colors, t):
-    if t >= 1.0:
-      return end_colors
-    if t <= 0.0:
-      return begin_colors
-
-    inv_t = 1.0 - t
-    return [rl.Color(
-      int(inv_t * start.r + t * end.r),
-      int(inv_t * start.g + t * end.g),
-      int(inv_t * start.b + t * end.b),
-      int(inv_t * start.a + t * end.a)
-    ) for start, end in zip(begin_colors, end_colors, strict=True)]

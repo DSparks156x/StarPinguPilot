@@ -16,7 +16,7 @@ import threading
 from typing import Any, cast
 from collections.abc import Callable
 
-import pyray as rl
+from openpilot.starpilot.ui.raylib import rl
 import openpilot.cereal.messaging as messaging
 from opendbc.car.structs import car as car_schema
 
@@ -220,10 +220,13 @@ class StarShellSession:
     except Exception:
       self.fonts.close()
       raise
+    from openpilot.starpilot.ui.home_stats_source import HomeStatsSource
+    self.home_stats_source = HomeStatsSource() if profile == Profile.LARGE else None
     self.galaxy_access = _galaxy_access_owner()
     self.bluetooth_source = BluetoothStatusSource() if profile == Profile.COMPACT else None
     self.adapter = RuntimeSnapshotAdapter(ui_state, self.galaxy_access,
-                                          self.bluetooth_source.snapshot if self.bluetooth_source is not None else None)
+                                          self.bluetooth_source.snapshot if self.bluetooth_source is not None else None,
+                                          home_stats=self.home_stats_source.snapshot if self.home_stats_source is not None else None)
     self.galaxy_flow = GalaxyAccessFlow(self.galaxy_access, self.confirmed_offroad)
     self.feature_owner = FeatureSettingsOwner(ui_state.params, self._feature_authority,
                                                vehicle_fingerprint=lambda: getattr(ui_state.CP, "carFingerprint", None),
@@ -349,6 +352,13 @@ class StarShellSession:
     alert_allowed = state.alert.size == AlertSize.NONE or allow_personality_notice and is_personality_notice(state.alert)
     return bool(self._mode == ShellMode.ONROAD and state.camera_available and alert_allowed and camera_allowed)
 
+  def _bookmark_authority(self) -> bool:
+    if (getattr(ui_state, "replay_clock", None) is not None or
+        self._mode != ShellMode.ONROAD or not ui_state.started):
+      return False
+    car_state = display_message(ui_state.sm, 'carState', time.monotonic_ns(), after_frame=ui_state.started_frame)
+    return bool(car_state is not None and car_state.canValid and not car_state.canTimeout)
+
   def _render_driver_monitor(self, rect, state):
     from openpilot.starpilot.ui.runtime_snapshot import display_message
     now = state.observed_ns or time.monotonic_ns()
@@ -382,6 +392,7 @@ class StarShellSession:
   def native_favorite_actions(self, bookmark, personality, experimental):
     state = self.snapshot(ShellMode.ONROAD).onroad
     available = self._favorite_authority()
+    bookmark_available = self._bookmark_authority()
     conditional = self._conditional_favorite_active()
     long_available = bool(available and ui_state.CP is not None and ui_state.has_longitudinal_control and
                           not ui_state.params.get_bool("SafeMode"))
@@ -424,8 +435,9 @@ class StarShellSession:
                                  ui_state.has_longitudinal_control and not ui_state.params.get_bool("SafeMode"))
     self._wheel_personality = lambda: cycle_personality(-1)
     actions = {
-      BOOKMARK: FavoriteAction(BOOKMARK, "Bookmark", available=available, reason="" if available else "Onroad only",
-                               token=repr((drive, available)), invoke=lambda: guarded(bookmark)),
+      BOOKMARK: FavoriteAction(BOOKMARK, "Bookmark", available=bookmark_available, reason="" if bookmark_available else "Fresh onroad state required",
+                               token=repr((drive, bookmark_available)),
+                               invoke=lambda: self._bookmark_authority() and bookmark()),
       CYCLE_PERSONALITY: FavoriteAction(CYCLE_PERSONALITY, "Cycle Driving Personality", kind="enum",
                                       state_label=("Aggressive", "Standard", "Relaxed")[current_personality],
                                       available=personality_available, reason="" if personality_available else "Longitudinal control required",
@@ -468,7 +480,7 @@ class StarShellSession:
       invoke=lambda: guarded(device.toggle_screen_off))
     if not hasattr(self, 'mode_actions'):
       self.mode_actions = ModeActionPublisher()
-    for key, label, mode, requested in ((TRAFFIC, "Traffic Mode", 'traffic', state.traffic_mode),
+    for key, label, mode, requested in ((TRAFFIC, "Traffic Mode", 'traffic', state.traffic_selected or state.traffic_mode),
                                        (SWITCHBACK, "Switchback Mode", 'switchback', getattr(state, 'switchback_mode', False))):
       now_ns = time.monotonic_ns()
       allowed = (self._favorite_authority() and not ui_state.params.get_bool("SafeMode") and
@@ -572,7 +584,11 @@ class StarShellSession:
         self._wheel_pending.append(event)
         continue
       command = self._wheel_consumer.accept(event, ui_state.params, ui_state.CP, ui_state.sm, now_ns=now_ns)
-      if command is None or command.action == 0 or not self._favorite_authority(allow_personality_notice=command.action == 1):
+      if command is None or command.action == 0:
+        continue
+      authorized = (self._bookmark_authority() if command.action == 8 else
+                    self._favorite_authority(allow_personality_notice=command.action == 1))
+      if not authorized:
         continue
       actions = self._native_favorite_actions()
       try:
@@ -1748,6 +1764,9 @@ class StarShellSession:
     self._aol_save_closed = True
     if pending := getattr(self, "_aol_save", None):
       pending.cancel.set()
+    if source := getattr(self, "home_stats_source", None):
+      source.close()
+      self.home_stats_source = None
     self.drive_state.physical.close()
     self.slc_actions = None
     self.galaxy_flow.close()

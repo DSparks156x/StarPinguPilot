@@ -214,15 +214,16 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
   fordLearningEvidence @35 :FordLearningEvidence;
   learningApplication @36 :LearningApplication;
   feedbackPublication @37 :FeedbackPublication;
+  steeringLimitInfo @39 :StarPilotCarControl.SteeringLimitInfo;
   toyotaCruise @38 :ToyotaCruise;
 
   # StarPinguPilot: Audi TT Mk2 light state for lightd (Gate_Komf_1 / Gate_Komf_2)
-  lowBeamOn @39 :Bool;
-  highBeamOn @40 :Bool;
-  highBeamStalk @41 :Bool;
-  frontWipersOn @42 :Bool;
-  lightSensorBucket @43 :UInt8;  # G397 ambient code 0..7 (GK2_Helligkeit), 255 = not available
-  lightSensorFault @44 :Bool;
+  lowBeamOn @40 :Bool;
+  highBeamOn @41 :Bool;
+  highBeamStalk @42 :Bool;
+  frontWipersOn @43 :Bool;
+  lightSensorBucket @44 :UInt8;  # G397 ambient code 0..7 (GK2_Helligkeit), 255 = not available
+  lightSensorFault @45 :Bool;
 
   # StarPinguPilot: camera auto headlights + high beam assist, see openpilot/starpilot/system/lightd/DESIGN.md.
   # Published by lightd as its own Event (starpilotLightState), only nested here because every reserved slot is taken.

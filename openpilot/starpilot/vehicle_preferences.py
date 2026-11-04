@@ -38,13 +38,13 @@ class VehicleStartupPreferences:
   volt_sng: bool = False
   gm_auto_hold: bool = False
   volt_one_pedal: bool = False
+  tesla_cooperative: bool = field(default=False, kw_only=True)
   tesla_screen: bool = False
   tesla_screen_brake: bool = False
   gm_camera_pedal: bool = True
   toyota_filter: bool = True
   gm_longitudinal_tune: int = 0
-  ford_lateral_mode: int = 0
-  ford_pinion: bool = field(default=False, kw_only=True)
+  ford_bluepilot: tuple[tuple[str, str], ...] = field(default=(("disable_BP_lat_UI", "1"),), kw_only=True)
   toyota_lock_doors: bool = False
   toyota_unlock_doors: bool = False
   toyota_radar_mode: int = 0
@@ -54,12 +54,12 @@ class VehicleStartupPreferences:
 
   @classmethod
   def read(cls, params, *, enabled: bool):
-    from openpilot.starpilot.car.ford.lateral_preferences import selected as ford_mode
     from openpilot.starpilot.car.toyota.radar_preferences import selected as toyota_radar_mode
     from openpilot.starpilot.car.gm.tune_preferences import selected_tune
     from openpilot.starpilot.car.tesla.preap_preferences import stock_configuration
     from openpilot.starpilot.car.tesla.radar_settings import read_radar_settings
     from openpilot.starpilot.car.tesla.pedal_preferences import read_pedal_settings
+    from openpilot.starpilot.car.ford.bluepilot import startup_params as ford_bluepilot
     smoothing = read_snapshot(params, enabled=enabled)
     radar = read_radar_settings(params)
     pedal = read_pedal_settings(params)
@@ -107,6 +107,8 @@ class VehicleStartupPreferences:
     screen = bool(enabled and readable and safe in (None, b"0") and
                   read_saved(params, 'AlwaysOnLateral', 8) == (b'1', True) and
                   read_saved(params, 'TeslaAOLScreenTap', 8) == (b'1', True))
+    cooperative = bool(enabled and readable and safe in (None, b"0") and
+                       read_saved(params, "TeslaCoopSteering", 8) == (b"1", True))
     screen_brake = read_saved(params, 'TeslaAOLDisengageOnBrake', 8) == (b'1', True)
     return cls(vw_stock_long=vw_stock_long, vw_pq=vw_pq,
                subaru_smoothing=smoothing, subaru_avh_startup=bool(enabled and readable and safe in (None, b"0") and
@@ -117,10 +119,8 @@ class VehicleStartupPreferences:
                subaru_sng=bool(enabled and readable and safe in (None, b"0") and read_saved(params, "SubaruSNG", 8) == (b"1", True)),
                subaru_software_cruise=bool(enabled and readable and safe in (None, b"0") and
                    read_saved(params, "SubaruRedneckCruise", 8) == (b"1", True)), toyota_radar_mode=toyota_radar_mode(params, enabled=enabled),
-               ford_lateral_mode=ford_mode(params, enabled=enabled),
-               ford_pinion=bool(enabled and read_saved(params, "SafeMode", 8) in ((None, True), (b"0", True)) and
-                                read_saved(params, "FordPrefSteerAngleCurvature", 8) == (b"1", True)), tesla_screen=screen,
-               tesla_screen_brake=screen_brake, toyota_auto_hold=toyota,
+               ford_bluepilot=tuple(ford_bluepilot(params, enabled=enabled).items()), tesla_screen=screen,
+               tesla_screen_brake=screen_brake, tesla_cooperative=cooperative, toyota_auto_hold=toyota,
                toyota_sng=bool(enabled and readable and safe in (None, b"0") and
                                read_saved(params, "SNGHack", 8) == (b"1", True)), jeep_brake_hold=jeep_hold,
                gm_longitudinal_tune=selected_tune(params, enabled=enabled),
@@ -200,6 +200,8 @@ class VehicleStartupPreferences:
     prepare_stock(cp, self.tesla_preap_stock, self.tesla_preap_radar, self.tesla_preap_pedal)
     from opendbc.car.tesla.screen_button import apply_screen_button
     apply_screen_button(cp, self.tesla_screen, self.tesla_screen_brake)
+    from openpilot.starpilot.car.tesla.coop_preferences import prepare
+    prepare(cp, self.tesla_cooperative)
     self._prepare_honda_radar(cp)
     from opendbc.car.chrysler.brake_hold import apply_brake_hold
     apply_brake_hold(cp, self.jeep_brake_hold)
@@ -229,10 +231,8 @@ class VehicleStartupPreferences:
       apply_toyota_auto_hold(cp, self.toyota_auto_hold)
       from opendbc.car.toyota.ars510_preferences import apply_radar_mode
       apply_radar_mode(cp, self.toyota_radar_mode)
-    from opendbc.bluepilot_lateral.hosts.starpilot import select as select_ford_lateral
-    select_ford_lateral(cp, self.ford_lateral_mode)
-    from opendbc.car.ford.pinion import select as select_pinion
-    select_pinion(cp, self.ford_pinion)
+    from opendbc.bluepilot_lateral.hosts.starpilot.safety_param import init_ford_safety_param_starpilot
+    init_ford_safety_param_starpilot(cp, dict(self.ford_bluepilot))
     return cp
 
   def finalize(self, cp) -> None:
@@ -245,6 +245,8 @@ class VehicleStartupPreferences:
     prepare_stock(cp, self.tesla_preap_stock, self.tesla_preap_radar, self.tesla_preap_pedal)
     from opendbc.car.tesla.screen_button import apply_screen_button
     apply_screen_button(cp, self.tesla_screen, self.tesla_screen_brake)
+    from openpilot.starpilot.car.tesla.coop_preferences import prepare
+    prepare(cp, self.tesla_cooperative)
     self._prepare_honda_radar(cp)
     from opendbc.car.chrysler.brake_hold import apply_brake_hold
     apply_brake_hold(cp, self.jeep_brake_hold)

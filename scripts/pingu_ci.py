@@ -23,7 +23,7 @@ BOT_AUTHOR = "StarPinguPilot Build Bot"
 
 # Default CI build. Flags are expanded by ./build: --params = openpilot/common/libparams_c.so,
 # --panda = panda/board/obj/{panda,panda_h7,body_h7}.bin.signed, --cereal = openpilot/cereal/{services.h,libcereal.a,
-# libsocketmaster.a,messaging/bridge}.
+# libsocketmaster.a}.
 BUILD_ARGS = [
   "--params",
   "--panda",
@@ -43,13 +43,11 @@ NATIVE = ["*.c", "*.cc", "*.cpp", "*.h", "*.hpp", "*.pyx", "*.pxd", "*.capnp", "
 # services/keys/fields, so stale copies there don't change what they do. Code (socketmaster.cc, messaging.h,
 # params.cc, ...) is NOT covered: it changes every daemon that links it.
 COVERED = {
-  # cereal: service table + schema + bridge
+  # cereal: service table + schema
   "openpilot/cereal/services.py": "--cereal, loggerd/encoderd/bootlog",
   "openpilot/cereal/services.h": "--cereal, loggerd/encoderd/bootlog",
   "openpilot/cereal/*.capnp": "--cereal (libcereal.a)",
   "openpilot/cereal/SConscript": "--cereal",
-  "openpilot/cereal/messaging/bridge.cc": "--cereal (bridge)",
-  "openpilot/cereal/messaging/msgq_to_zmq.*": "--cereal (bridge)",
   # params
   "openpilot/common/params_keys.h": "--params",
   "openpilot/common/params_c.cc": "--params",

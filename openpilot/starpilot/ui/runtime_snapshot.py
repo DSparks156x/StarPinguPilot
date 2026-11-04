@@ -40,7 +40,7 @@ from openpilot.cereal.services import SERVICE_LIST
 from openpilot.tools.replay.display_clock import BOOT_TIME_SERVICES
 from opendbc.car.structs import car as car_schema
 from openpilot.starpilot.ui.device_state import DeviceRequest, DeviceState
-from openpilot.starpilot.ui.home_state import HomeMode, HomeState
+from openpilot.starpilot.ui.home_state import DriveStatsData, HomeMode, HomeState
 from openpilot.starpilot.models.jetlink_status import JetlinkStatusFeed
 from openpilot.starpilot.ui.onroad_state import conditional_lead_from_message
 from openpilot.starpilot.ui.onroad_state import (AlertSize, BorderSignals, ObservationKind, OnroadAlert,
@@ -302,11 +302,13 @@ class RuntimeSnapshotAdapter:
 
   def __init__(self, ui_state: Any, galaxy_access: GalaxyAccessOwner | None = None,
                bluetooth_powered: Callable[[], str | bool] | None = None,
-               *, mono_clock: Callable[[], int] = time.monotonic_ns,
+               *, home_stats: Callable[[bool], DriveStatsData | None] | None = None,
+               mono_clock: Callable[[], int] = time.monotonic_ns,
                boot_clock: Callable[[], int] = _boot_time_ns):
     self.ui_state = ui_state
     self.galaxy_access = galaxy_access
     self.bluetooth_powered = bluetooth_powered
+    self.home_stats = home_stats
     self._customization_value = default_document()
     self._appearance_value = OnroadAppearance()
     self._appearance_read_ns: int | None = None
@@ -397,8 +399,11 @@ class RuntimeSnapshotAdapter:
                       mono_clock=self._mono_clock, boot_clock=self._boot_clock)
         self._replay_epoch = replay.epoch
       now_ns = replay.now_ns if replay is not None and replay.valid else 0
+      traffic_clock = (replay.now_ns, replay.boot_ns) if replay is not None and replay.valid and replay.boot_ns is not None else None
     else:
       now_ns = time.monotonic_ns() if now_ns is None else now_ns
+      # Pair the Traffic clocks before settings reads and snapshot work can delay them.
+      traffic_clock = paired_clocks_ns()
     if mode != ShellMode.ONROAD or self._last_mode != ShellMode.ONROAD:
       self._onroad_ancillary = None
       self._onroad_view_ancillary = None
@@ -410,6 +415,8 @@ class RuntimeSnapshotAdapter:
         now_ns - self._appearance_read_ns >= 1_000_000_000):
       self._customization_value = read_customization(self.ui_state.params)
       self._appearance_value = onroad_appearance(self.ui_state.params)
+      self._navigation_enabled = _flag(self.ui_state.params, "NavigationEnabled")
+      self._show_curve_status = _flag(self.ui_state.params, "ShowCSCStatus")
       if self.appearance_override is not None:
         self._appearance_value = self.appearance_override(self._appearance_value)
       self._appearance_read_ns = now_ns
@@ -462,7 +469,7 @@ class RuntimeSnapshotAdapter:
     from openpilot.starpilot.navigation.wire import navigation_state
     navigation = navigation_state(_message_at_age(sm, "starpilotNavigation", now_ns, after, 3_000_000_000)) if started else None
     displayed_navigation = navigation_display(navigation, now_ns=now_ns, drive_id=drive_id)
-    if displayed_navigation is None and started and _flag(params, "NavigationEnabled"):
+    if displayed_navigation is None and started and self._navigation_enabled:
       displayed_navigation = official_navigation_display(
         _message_at_age(sm, "navInstruction", now_ns, after, 3_000_000_000),
         _message_at_age(sm, "navRoute", now_ns, after, 30_000_000_000),
@@ -542,14 +549,10 @@ class RuntimeSnapshotAdapter:
         except (AttributeError, OSError, TypeError, ValueError):
           self._traffic_profile_valid = False
         self._traffic_context_ns = now_ns
-      if getattr(ui, "replay_clock", None) is not None:
-        pair = (replay.now_ns, replay.boot_ns) if replay is not None and replay.valid and replay.boot_ns is not None else None
-      else:
-        pair = paired_clocks_ns()
-      if pair is not None and abs(pair[0] - now_ns) <= 10_000_000:
+      if traffic_clock is not None and abs(traffic_clock[0] - now_ns) <= 10_000_000:
         fingerprint = settings_fingerprint(self._traffic_settings.refresh(now_ns))
         traffic = self._traffic.project(
-          traffic_envelope, now_mono_ns=now_ns, now_boot_ns=pair[1],
+          traffic_envelope, now_mono_ns=now_ns, now_boot_ns=traffic_clock[1],
           drive_id=drive_id,
           settings_fingerprint=fingerprint, map_fingerprint=self._traffic_map_fingerprint,
           map_assigned=self._traffic_map_assigned,
@@ -690,9 +693,10 @@ class RuntimeSnapshotAdapter:
                            e.name == log.OnroadEvent.EventName.gasPressedOverride for e in display_events)),
                          right_hand_drive=getattr(self, '_display_rhd', False),
                          switchback_mode=bool(lateral_supported(cp) and display_control is not None and display_control.latActive and
-                           self._switchback.sample(slc, drive_id=drive_id, now_ns=now_ns,
+                           self._switchback.sample_state(slc, drive_id=drive_id, now_ns=now_ns,
                              event_ns=int(sm.logMonoTime['slcState']))),
                          traffic_mode=bool(traffic is not None and traffic.state == 'active'),
+                         traffic_selected=bool(started and self._traffic.drive_id == drive_id and self._traffic.requested),
                          traffic_display=traffic,
                          torque_utilization=torque.utilization if torque.utilization is not None else 0.0,
                          torque_source_available=torque.utilization is not None,
@@ -708,7 +712,7 @@ class RuntimeSnapshotAdapter:
                          stock_cruise_active=stock_cruise,
                          slc_system_long_available=system_long,
                          slc_wheel_confirmation_available=wheel_confirmation,
-                         curve=curve, show_curve_status=_flag(params, "ShowCSCStatus"),
+                         curve=curve, show_curve_status=self._show_curve_status,
                          conditional_configured=self._conditional_choice, conditional_effective=conditional,
                          conditional_perception=perception,
                          conditional_lead=conditional_lead_from_message(display_radar) if display_car_valid else None,
@@ -761,7 +765,8 @@ class RuntimeSnapshotAdapter:
                            HomeMode.CONDITIONAL_CHILL if self._conditional_choice is ModeChoice.CCM else
                            HomeMode.EXPERIMENTAL if experimental else HomeMode.CHILL),
                      experimental_enabled=experimental, experimental_available=bool(ui.has_longitudinal_control),
-                     stats=None, paired=bool(ui.prime_state.is_paired()), network=network, network_strength=strength,
+                     stats=self.home_stats(bool(ui.is_metric)) if mode == ShellMode.HOME and self.home_stats is not None else None,
+                     paired=bool(ui.prime_state.is_paired()), network=network, network_strength=strength,
                      temperature_c=device.maxTempC if device is not None else None, metric=bool(ui.is_metric),
                      temperature_high=device is not None and device.thermalStatus != log.DeviceState.ThermalStatus.ok,
                      vehicle_online=panda_connected, connection=connection,
@@ -844,6 +849,7 @@ class RuntimeSnapshotAdapter:
                            record_front=_flag(params, "RecordFront"),
                            record_audio=_flag(params, "RecordAudio"), metric=bool(ui.is_metric), personality=persona,
                            unavailable=frozenset((ToggleKey.SAFE_MODE,)) | (
+                             frozenset((ToggleKey.ALWAYS_ON_DM,)) if _flag(params, "AlwaysOnDMLock") else frozenset()) | (
                              frozenset() if confirmed_offroad and not _flag(params, "IsDriverViewEnabled") else
                              frozenset((ToggleKey.RIGHT_HAND_DRIVING,))))
     snapshot = ShellSnapshot(mode, home, settings, onroad, device_state, software, toggles, selected)

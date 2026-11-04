@@ -9,7 +9,6 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.common.params import UnknownKeyName
 from openpilot.starpilot.lateral.lane_centering import ControlMode, LaneCenteringRequest, LaneCenteringSettings, STRENGTH_BASELINE, STRENGTH_MAX
 from openpilot.starpilot.feature_capabilities import lateral_supported
-from openpilot.starpilot.lateral.chubbs_lane import selected as chubbs_selected
 
 
 def read_settings(params) -> LaneCenteringSettings:
@@ -29,7 +28,7 @@ def read_settings(params) -> LaneCenteringSettings:
     enabled = boolean('LaneCentering', b'0')
     pause = boolean('LaneCenteringPauseOnSignal', b'1')
     offset = float(raw('LaneCenterOffset', b'0.0'))
-    authority = float(raw('LaneCenteringE2EAuthority', b'1.0'))
+    authority = float(raw('LaneCenteringE2EAuthority', b'0.5'))
     try:
       strength = float(raw('LaneCenteringStrength', str(STRENGTH_BASELINE).encode()))
     except UnknownKeyName:
@@ -56,7 +55,6 @@ class LaneCenteringHost:
 
   def __init__(self, params):
     self.params = params
-    self.chubbs_enabled = chubbs_selected(params)
     self.settings = LaneCenteringSettings()
     self.last_refresh_ns: int | None = None
     self.last_tick_ns: int | None = None
@@ -64,7 +62,7 @@ class LaneCenteringHost:
 
   def inputs_need_refresh(self, sm, *, now_ns: int) -> bool:
     """Leave time to receive queued state before checking its original age."""
-    return not self.chubbs_enabled and self.settings.enabled and any(
+    return self.settings.enabled and any(
       0 < int(sm.logMonoTime[name]) < now_ns - 15_000_000 for name in ('carState', 'selfdriveState')
     )
 
@@ -81,7 +79,7 @@ class LaneCenteringHost:
     if self.last_refresh_ns is None or now_ns < self.last_refresh_ns or now_ns - self.last_refresh_ns >= self.REFRESH_NS:
       self.settings = read_settings(self.params)
       self.last_refresh_ns = now_ns
-    if self.chubbs_enabled or not self.settings.enabled:
+    if not self.settings.enabled:
       self.last_refusal = 'host_disabled'
       return None
     if not sm['carState'].canValid:

@@ -3,10 +3,11 @@
 from typing import TypedDict, cast
 
 
+from types import SimpleNamespace
 from functools import lru_cache
 import struct
 
-from capnp.lib.capnp import _DynamicStructReader
+from capnp.lib.capnp import _DynamicListReader, _DynamicStructReader
 from openpilot.cereal import custom, messaging
 from openpilot.starpilot.flm.adaptive_profile import Parameter, Profile, ReplayValidation, replay_accepts
 from openpilot.starpilot.flm.fullrate_collector import ControlEvidence, AppliedEvidence, identity, finite
@@ -50,6 +51,10 @@ def _named_values(values):
   return [{'name': _string(name, 96), 'boolean' if type(value) is bool else 'text' if type(value) is str else 'number': value} for name, value in values]
 
 
+def _named_pairs(values, limit=96):
+  return [(_string(name, limit), value) for name, value in values]
+
+
 @lru_cache(maxsize=2048)
 def _evidence_field_name(name):
   # Receiver-only immutable key sharing. Ten minutes of100Hz actual replay
@@ -58,15 +63,38 @@ def _evidence_field_name(name):
   return name
 
 
+@lru_cache(maxsize=4096)
+def _scalar_pair(name, kind, value):
+  return name, struct.unpack('!d', value)[0] if kind is float else value
+
+
+def _shared_scalar_pair(name, value):
+  # Share exact immutable content, including IEEE signed zero; never a verdict.
+  if not name or len(name.encode()) > 96 or type(value) is str and len(value.encode()) > 96:
+    return name, value
+  return _scalar_pair(name, type(value), struct.pack('!d', value) if type(value) is float else value)
+
+
 def _read_named_values(values, bound):
   if len(values) > bound:
     raise ValueError('replay scalar bounds')
   result = []
+  if (type(values) is _DynamicListReader and len(values) and
+      type(values[0]) is _DynamicStructReader and values[0].schema == custom.LearningControlEvidence.NamedValue.schema):
+    fields = custom.LearningControlEvidence.NamedValue.schema.fields
+    name_field = fields['name']
+    for row in values:
+      name = _evidence_field_name(_string(str(row._get_by_field(name_field)), 96))
+      kind = row._which_str()
+      value = row._get_by_field(fields[kind])
+      value = bool(value) if kind == 'boolean' else _string(str(value), 96) if kind == 'text' else float(value)
+      result.append(_shared_scalar_pair(name, value))
+    return tuple(result)
   for row in values:
     name = _evidence_field_name(_string(str(row.name), 96))
     kind = row.which()
     value = bool(row.boolean) if kind == 'boolean' else _string(str(row.text), 96) if kind == 'text' else float(row.number)
-    result.append((name, value))
+    result.append(_shared_scalar_pair(name, value))
   return tuple(result)
 
 
@@ -152,7 +180,7 @@ def write_control(parent, evidence):
     'features': evidence.features,
     'baselinePrediction': evidence.baseline_prediction,
     'stageSchemaRevision': _string(evidence.stage_schema_revision),
-    'stageValues': [{'name': _string(name, 64), 'value': v} for name, v in evidence.stage_values],
+    'stageValues': _named_pairs(evidence.stage_values, 64),
     'appliedCoordinates': evidence.applied_coordinates,
     'sourceEpoch': evidence.source_epoch,
     'sourceReceiptMonoTime': evidence.source_receipt_ns,
@@ -161,8 +189,8 @@ def write_control(parent, evidence):
     'baselineRevision': evidence.baseline_revision,
     'baselineValues': evidence.baseline_values,
     'controllerRevision': _string(evidence.controller_revision),
-    'replaySnapshot': _named_values(evidence.replay_snapshot),
-    'replayInputs': _named_values(evidence.replay_inputs),
+    'replaySnapshot': _named_pairs(evidence.replay_snapshot),
+    'replayInputs': _named_pairs(evidence.replay_inputs),
     'snapshotSequence': evidence.snapshot_sequence,
     'vehicleModelAnchor': evidence.vehicle_model_anchor,
     'liveAppliedCoordinates': evidence.live_applied_coordinates,
@@ -200,16 +228,26 @@ def write_control(parent, evidence):
   wire = parent.init('learningEvidence')
   for name, value in payload.items():
     if name in ('replaySnapshot', 'replayInputs', 'stageValues'):
-      nested_values = cast(list[dict[str, object]], value)
+      nested_values = cast(list[tuple[str, object]], value)
       rows = wire.init(name, len(nested_values))
-      for row, fields in zip(rows, nested_values, strict=True):
-        for field, item in fields.items():
-          setattr(row, field, item)
+      for row, (field, item) in zip(rows, nested_values, strict=True):
+        row.name = field
+        kind = ('value' if name == 'stageValues' else
+                'boolean' if type(item) is bool else 'text' if type(item) is str else 'number')
+        setattr(row, kind, item)
     else:
       setattr(wire, name, value)
 
   if evidence.effect_trace is not None:
     wire.effectTrace = _write_effect_trace(evidence.effect_trace)
+
+
+def _read_fields(row, schema):
+  if type(row) is _DynamicStructReader and row.schema == schema:
+    values = {name: row._get_by_field(field) for name, field in schema.fields.items()}
+    return SimpleNamespace(**{name: _evidence_field_name(value) if type(value) is str and 0 < len(value.encode()) <= 96 else value
+                              for name, value in values.items()})
+  return row
 
 
 def read_control(event):
@@ -229,6 +267,7 @@ def read_control(event):
     or not all(finite(float(v)) and float(v) != 0.0 for v in row.vehicleModelAnchor)
   ):
     raise ValueError('control version or bound')
+  row = _read_fields(row, custom.LearningControlEvidence.schema)
   return ControlEvidence(
     str(row.identity),
     int(row.generation),
@@ -251,7 +290,7 @@ def read_control(event):
     bool(row.modelWobble),
     bool(row.controllerChatter),
     str(row.stageSchemaRevision),
-    tuple((str(v.name), float(v.value)) for v in row.stageValues),
+    tuple(_shared_scalar_pair(str(v.name), float(v.value)) for v in row.stageValues),
     tuple(float(v) for v in row.appliedCoordinates),
     str(row.sourceEpoch),
     int(row.sourceReceiptMonoTime),
@@ -315,6 +354,7 @@ def read_applied(event):
   row = event.starpilotCarState.appliedEvidence
   if row.version != VERSION:
     raise ValueError('applied version')
+  row = _read_fields(row, custom.LearningAppliedEvidence.schema)
   return AppliedEvidence(
     int(row.controlMonoTime),
     int(row.sourceStateMonoTime),

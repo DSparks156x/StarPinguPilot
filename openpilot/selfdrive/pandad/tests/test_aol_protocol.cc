@@ -249,28 +249,18 @@ int main() {
     assert(aol_capable(preap, 39U, VEHICLE_REGISTRY) == preap_expected);
     assert(!aol_capable(preap, 35U, VEHICLE_REGISTRY));
   }
-  constexpr uint16_t ford_words[] = {8U, 9U, 10U, 11U, 12U, 13U, 18U, 19U, 32U, 33U, 66U, 67U, 146U, 147U, 160U, 161U, 194U, 195U};
+  constexpr uint16_t ford_words[] = {0U, 1U, 2U, 3U, 8U, 9U, 10U, 11U, 12U, 13U};
   for (uint32_t word = 0U; word <= 65535U; ++word) {
     bool expected = false;
-    for (const auto exact : ford_words) expected |= (word == exact) || (word == (exact | 256U));
-    // Exact opt-in geometry families, independently enumerated from the native decoder.
-    for (uint16_t geometry = 1U; geometry <= 12U; geometry++) {
-      const bool classic = (geometry == 1U) || (geometry == 2U) || (geometry == 5U) || (geometry == 6U) || (geometry == 9U);
-      const uint16_t curvature = classic ? 32U : ((geometry == 11U) ? 18U : ((geometry == 10U) ? 10U : 66U));
-      for (uint16_t longitudinal = 0U; longitudinal <= 1U; longitudinal++) {
-        for (uint16_t angle = 0U; angle <= 1U; angle++) {
-          if ((geometry == 10U) && angle) continue;
-          const uint16_t exact = 512U | (geometry << 10U) | curvature | longitudinal | (angle ? 128U : 0U);
-          expected |= (word == exact) || (word == (exact | 256U));
-        }
-      }
-    }
+    // Bits 9-14 carry the BluePilot lateral library's startup bits, whatever they hold.
+    const uint32_t profile = word & ~0x7E00U;
+    for (const auto exact : ford_words) expected |= (profile == exact) || (profile == (exact | 256U));
     auto ford = status();
     ford.safety_mode = 6U;
     ford.safety_param = static_cast<uint16_t>(word);
     assert(aol_capable(ford, 6U, VEHICLE_REGISTRY) == expected);
   }
-  constexpr uint16_t tesla_screen_words[] = {512U, 513U, 1536U, 1537U};
+  constexpr uint16_t tesla_screen_words[] = {512U, 513U, 768U, 769U, 1536U, 1537U, 1792U, 1793U};
   for (uint32_t word = 0U; word <= 65535U; ++word) {
     bool expected = false;
     for (const auto exact : tesla_screen_words) expected |= word == exact;
@@ -300,7 +290,7 @@ int main() {
   FakeTransport ford_transport;
   auto ford_status = status();
   ford_status.safety_mode = 6U;
-  ford_status.safety_param = 32U;
+  ford_status.safety_param = 0U;
   auto ford_axis = axis("ford-session", false, false);
   ford_axis.retain_lateral_arm = true;
   queue(ford_transport, ford_status, ford_status);
@@ -515,7 +505,7 @@ int main() {
   constexpr uint16_t sportage_long_words[] = {0x0804U, 0x0806U, 0x080CU, 0x080EU, 0x0814U, 0x0816U,
                                               0x0894U, 0x0896U, 0x0824U, 0x0826U, 0x082CU, 0x082EU};
   for (uint32_t word = 0U; word <= 0xFFFFU; ++word) {
-    bool expected = word == 0x2815U || word == 0x2895U || word == 0x0815U || word == 0x0895U || word == 0x8815U || word == 0x8895U || word == 0x5491U || word == 0x5C91U || word == 0x5C95U || word == 0x5495U;
+    bool expected = word == 0x28B4U || word == 0x080DU || word == 0x2815U || word == 0x2895U || word == 0x0815U || word == 0x0895U || word == 0x8815U || word == 0x8895U || word == 0x5491U || word == 0x5C91U || word == 0x5C95U || word == 0x5495U;
     for (uint16_t stock_word : stock_canfd_words) {
       expected = expected || word == stock_word;
     }
