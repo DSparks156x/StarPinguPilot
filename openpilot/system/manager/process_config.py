@@ -203,6 +203,7 @@ procs = [
   PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run),
   PythonProcess("pingulink_uploader", "openpilot.system.pingulink.uploader", pingulink),  # StarPinguPilot
   PythonProcess("lightd", "openpilot.starpilot.system.lightd.lightd", lightd),  # StarPinguPilot
+  PythonProcess("wifi_preference", "openpilot.starpilot.system.wifi_preference", only_offroad, enabled=not PC),  # StarPinguPilot
 
   # debug procs
   PythonProcess("webrtcd", "openpilot.system.webrtc.webrtcd", or_(livestream, notcar)),
