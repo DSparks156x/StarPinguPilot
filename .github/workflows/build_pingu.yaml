@@ -25,8 +25,9 @@
 #
 # - Upstream StarPilot merges bring upstream-built binaries, which don't know fork-only services (starpilotLightState)
 #   or other fork changes. The default list always rebuilds the cereal/loggerd binaries, so those get fixed on the
-#   next push. If the merge also touched native code outside the list, the guard fires: rebuild those targets
-#   (add them, or run full_build=true) before driving with that merge.
+#   next push. Native files outside the list that are byte-identical to the merged upstream commit pass the guard:
+#   upstream ships binaries built from them (Dom refreshes prebuilt.json on every commit). If the merge left a fork
+#   edit in native code outside the list, the guard fires: rebuild those targets (add them, or run full_build=true).
 name: Build StarPinguPilot
 
 on:

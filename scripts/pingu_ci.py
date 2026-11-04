@@ -47,6 +47,7 @@ COVERED = {
   "openpilot/cereal/services.py": "--cereal, loggerd/encoderd/bootlog",
   "openpilot/cereal/services.h": "--cereal, loggerd/encoderd/bootlog",
   "openpilot/cereal/*.capnp": "--cereal (libcereal.a)",
+  "openpilot/cereal/gen/*": "--cereal (regenerated from the schema)",
   "openpilot/cereal/SConscript": "--cereal",
   # params
   "openpilot/common/params_keys.h": "--params",
@@ -102,6 +103,21 @@ def find_base(head, fallback=None):
   return None, None
 
 
+def upstream_paths(base, head, paths):
+  # Paths whose HEAD blob equals the newest merged-in side branch (an upstream merge) in base..head. Those are upstream's
+  # own sources, and upstream's committed binaries are built from them; only fork edits need our rebuild.
+  merges = git("rev-list", "--first-parent", "--merges", f"{base}..{head}").splitlines()
+  if not merges or not paths:
+    return set()
+  upstream = git("rev-parse", f"{merges[0]}^2")
+
+  def blobs(rev):
+    out = git("ls-tree", "-z", rev, "--", *paths)
+    return {line.split("\t", 1)[1]: line.split()[2] for line in out.split("\0") if line}
+  ours, theirs = blobs(head), blobs(upstream)
+  return {p for p in paths if ours.get(p) == theirs.get(p)}
+
+
 def cmd_guard(base=None, head="HEAD"):
   why = "given"
   if base is None:
@@ -113,9 +129,11 @@ def cmd_guard(base=None, head="HEAD"):
   changed = git("diff", "--no-renames", "--name-only", base, head).splitlines()
   native = [p for p in changed if is_native(p)]
   bad = classify(changed)
+  same = upstream_paths(base, head, bad)
+  bad = [p for p in bad if p not in same]
   print(f"guard: {base[:10]}..{head} ({why}): {len(changed)} files changed, {len(native)} native, {len(bad)} uncovered")
   for p in native:
-    print(f"  {'UNCOVERED' if p in bad else 'ok':9} {p}")
+    print(f"  {'UNCOVERED' if p in bad else 'upstream' if p in same else 'ok':9} {p}")
   if bad:
     for p in bad:
       print(f"::error file={p}::native source {p} changed but isn't in the CI build list; add its target to "
