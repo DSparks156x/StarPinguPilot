@@ -123,10 +123,27 @@ void OS04C10::stagger_configure() {
   }
 
   stagger = true;
-  long_vc = 1;   // #36806 "use long exposure": the IFE pixel path on VC 1
-  short_vc = 0;
-  if (getenv("CAMERA_SHORT_VC_SWAP")) std::swap(long_vc, short_vc);  // bring-up: if the "short" stream is the bright one
+  // measured on the comma 4 (2026-11-04): VC 0 follows the long exposure registers, VC 1 doesn't (#36806 had it the
+  // other way round). With the long one on the IFE, the processed frame matches linear mode at the same exposure.
+  long_vc = 0;
+  short_vc = 1;
+  if (getenv("CAMERA_SHORT_VC_SWAP")) std::swap(long_vc, short_vc);  // bring-up
   short_exposure_lines = 0x40;  // 0x3510-0x3512 in the init table, ~1.3 ms; its gain 0x350c/d stays at the table's 1x
+  if (const char *lines = getenv("CAMERA_SHORT_LINES")) {  // bring-up: a short exposure long enough to see indoors
+    short_exposure_lines = std::atoi(lines);
+    for (auto &reg : init_reg_array) {
+      if (reg.reg_addr == 0x3510) reg.reg_data = (short_exposure_lines >> 16) & 0xff;
+      if (reg.reg_addr == 0x3511) reg.reg_data = (short_exposure_lines >> 8) & 0xff;
+      if (reg.reg_addr == 0x3512) reg.reg_data = short_exposure_lines & 0xff;
+    }
+  }
+  if (const char *gain = getenv("CAMERA_SHORT_GAIN")) {  // bring-up: analog gain register value, 0x80 = 1x .. 0x7c0 = 15.5x
+    uint32_t g = std::strtoul(gain, nullptr, 0);
+    for (auto &reg : init_reg_array) {
+      if (reg.reg_addr == 0x350c) reg.reg_data = (g >> 8) & 0xff;
+      if (reg.reg_addr == 0x350d) reg.reg_data = g & 0xff;
+    }
+  }
 
   bits_per_pixel = 10;
   mipi_format = CAM_FORMAT_MIPI_RAW_10;

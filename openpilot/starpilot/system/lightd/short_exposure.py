@@ -9,7 +9,7 @@ import numpy as np
 SHORT_EXPOSURE_LINES = 0x40  # 0x3510-0x3512 in camerad's OS04C10 init table
 ROW_TIME_S = 50e-3 / 2523    # staggered HDR VTS: about 19.8 us per row
 SHORT_EXPOSURE_S = SHORT_EXPOSURE_LINES * ROW_TIME_S
-BLACK_LEVEL = 12             # RAW10 counts. TODO: measure with the lens covered (CAMERA_HDR.md section 8, phase 2)
+BLACK_LEVEL = 16             # RAW10 counts, measured: a dark room's short frames read 15-16 at every percentile
 RAW_MAX = 1023
 
 

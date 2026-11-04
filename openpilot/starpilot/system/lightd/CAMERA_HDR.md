@@ -283,10 +283,14 @@ of the two tables shows exactly those 15 differ, and nothing else. `OS04C10::sta
 init table in place, keeping the write order, so the PLL is still set first. A host check confirms the result equals the
 PR's table. It also sets:
 - RAW10 (`CSI_RAW10`, `bits_per_pixel` 10, stride 3360);
-- `black_level` 12 (48 at 12 bits; to be measured);
-- `readout_time_ns` 10.29 ms (rows of 19.8 instead of 21.2 us; to be measured);
-- long VC 1 and short VC 0, as #36806 had them. `CAMERA_SHORT_VC_SWAP=1` in camerad's environment swaps them for
-  bring-up.
+- `black_level` 12 (48 at 12 bits). With it, the processed frame matches linear mode (see below);
+- `readout_time_ns` 10.29 ms (rows of 19.8 instead of 21.2 us; not measured);
+- long VC 0 and short VC 1, measured on the device. #36806 had them the other way round.
+
+Bring-up environment variables for camerad (none needed in normal use):
+- `CAMERA_SHORT_VC_SWAP=1` swaps the VCs;
+- `CAMERA_SHORT_LINES=<n>` and `CAMERA_SHORT_GAIN=<reg>` (0x80 = 1x .. 0x7c0 = 15.5x) override the short exposure;
+- `CAMERA_STAGGER_IGNORE_SYNC=1` keeps stagger mode running when the first-frame sync times out.
 
 The short exposure is the table's 64 lines (about 1.27 ms) at gain 1x. In stagger mode `getExposureRegisters` no longer
 copies the long gain into `0x350c/d`, so a short frame's brightness means the same thing on every frame.
@@ -297,8 +301,9 @@ copies the long gain into `0x350c/d`, so a short frame's brightness means the sa
 - **HFR blob:** it now lists `RDI_0` too. A write master's frame-drop pattern stays 0 (drop every frame) until an HFR
   config sets it (`cam_vfe_bus_ver2.c`).
 - **Per request:** a second `io_cfg` and its own fence (`sync_objs_short`).
-- **After the FULL wait:** a 5 ms wait on the short fence. The RDI write ends with the readout, before the IFE's processing
-  does.
+- **After the FULL wait:** a wait of up to 20 ms (plus the short exposure's duration) on the short fence. The short frame
+  is normally done by then already. cam_sync's timeout counts scheduler ticks, and a 6 ms wait was seen to expire after
+  1.4 ms.
 - **Short-exposure buffers:** a ring of 4 VisionIPC buffers (`SHORT_BUF_COUNT`), indexed by request id. That's 4 x 5.1 MB
   per camera, against 18 for a buffer per request. A buffer is reused 200 ms later, long after a reader has finished
   with it.
@@ -349,3 +354,32 @@ Car parked, at night for phases 1-2, ignition on. Over SSH:
 5. **openpilot parity:** with openpilot started normally (`tmux` session back, param on), the road and wide views look
    normal in the UI, `cabinCameraState` and driver monitoring work, and `modelV2` runs at 20 Hz. Then section 8's phase 2-3
    image and model comparisons, before any engaged driving with the param on.
+
+### Bring-up on the comma 4, parked indoors (2026-11-04)
+
+camerad was run by hand while offroad, built on the device itself (clang, the AGNOS media headers and the checkout's static
+libs; a build takes about 3 minutes). Scripts: `camrates.py` (camera state rates and SOF alignment) and `shortrate.py`
+(short stream rates).
+
+| run | result |
+|---|---|
+| new camerad, param off | same as the old binary: 20.0 Hz each, narrow-wide SOF within 0.05 ms, cabin +25 ms, streams 0/1/2 |
+| stagger, VC 1 as long (#36806) | the processed frame got the fixed short exposure: AE pinned at 2352 lines x 8.5. Cabin SOF moved to +23.5 ms, so sync timed out and the fallback fired, correctly |
+| stagger, VC 0 as long | AE normal. Fixed exposure, 500 / 2000 lines at gain 3.62: processed Y 36.2 / 60.8, against linear's 36.0 / 60.6. So RAW10 and the stagger timing don't change openpilot's image, and the exposure units are the same |
+| short exposure 1200 lines x 15.5 (bring-up) | the short frame shows the same scene, framing and orientation as the processed one, so the VC split, RDI write and RAW10 unpack are right |
+| soak, defaults, 90 s | short streams 20.02 Hz with 0 gaps, cameras 20.0 Hz and synced (cabin +24.7..25.1 ms), no fallback, camerad 17 % of a core |
+
+Fixes from this run:
+- VC defaults (above);
+- lightd's short `BLACK_LEVEL` 16, read off a dark room's short frames (15-16 at every percentile);
+- the short fence wait (above);
+- the fallback re-execs the real path, so the process is still named `camerad`;
+- timed-out first-frame sync logs each camera's SOF offset.
+
+Indoors the 64-line short frame is black (16-17). That's expected at 1/35 of the long exposure. Lamps are what it's for.
+
+Still open:
+- night lamps through the short stream (a parked night look, then a drive);
+- modeld and DM running with the param on (needs onroad);
+- the cabin camera's +23.5 vs +25 ms behaviour if the VCs were ever wrong (the sync check covers it);
+- `readout_time_ns`.

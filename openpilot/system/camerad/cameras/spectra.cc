@@ -1596,7 +1596,7 @@ bool SpectraCamera::handle_camera_event(const cam_req_mgr_message *event_data) {
   }
 
   if (sensor->stagger) {
-    if (first_frame_sync_timed_out) {
+    if (first_frame_sync_timed_out && !getenv("CAMERA_STAGGER_IGNORE_SYNC")) {  // bring-up: keep running to measure
       // stagger timing that drifts from the cabin camera's; modeld pairs road and wide frames by id
       shortExposureFailed("the cameras' first frames never lined up");
     }
@@ -1688,8 +1688,11 @@ bool SpectraCamera::waitForFrameReady(uint64_t request_id) {
 
   short_ready = false;
   if (success && sync_objs_short[buf_idx]) {
-    // RDI_0's write ends with the readout, before the IFE's processing does: if it isn't done now, it isn't coming
-    short_ready = waitForSync(sync_objs_short[buf_idx], 5, "short exposure sync");
+    // the short frame's rows trail the long one's by about the short exposure time (1.3 ms at 64 lines, 19.8 us rows),
+    // then RDI_0 only writes them out. It's normally done by now. cam_sync's timeout is in scheduler ticks, so a few ms
+    // can expire in under 2 (seen on the comma 4): 20 ms is a few ticks, well inside the 50 ms frame.
+    const int short_ms = 20 + sensor->short_exposure_lines * 20 / 1000;
+    short_ready = waitForSync(sync_objs_short[buf_idx], short_ms, "short exposure sync");
   }
 
   return success;
@@ -1773,6 +1776,10 @@ bool SpectraCamera::syncFirstFrame(int camera_id, uint64_t request_id, uint64_t 
   // Timeout in case the timestamps never line up
   if (ife_frame_id > 40) {
     LOGE("camera first frame sync timed out");
+    for (const auto &[cam, sync_data] : camera_sync_data) {
+      LOGE("  camera %d: SOF %+.3f ms from camera %d's%s", cam, ((int64_t)sync_data.timestamp - (int64_t)timestamp) * 1e-6,
+           camera_id, sync_data.staggered ? " (half-period offset expected)" : "");
+    }
     first_frame_synced = true;
     first_frame_sync_timed_out = true;
   }
