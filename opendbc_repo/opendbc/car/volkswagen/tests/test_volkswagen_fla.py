@@ -9,7 +9,7 @@ from opendbc.car import DT_CTRL, structs
 from opendbc.car.volkswagen.fla import (FLA_STEP, HBA_OFF, LIGHT_INVALID, PQ_LIGHT_TX, HbaCommand, LightCommand, apply_light_carrier,
                                         create_fla_1)
 from opendbc.car.volkswagen.interface import CarInterface
-from opendbc.car.volkswagen.values import CAR
+from opendbc.car.volkswagen.values import CAR, VolkswagenFlags
 
 packer = CANPacker("vw_pq")
 HBA_STATES = (HBA_OFF, HbaCommand(True, True, 0), HbaCommand(True, False, 1), HbaCommand(True, False, 2, sensor_blocked=True))
@@ -132,3 +132,24 @@ def test_tt_single_sender_10hz_only_with_safety_bit():
   assert len(sent) == 1
   dat = sent[0][1]
   assert dat[0] == 0x8B and dat[3] & 0x7F == 100 and dat[7] & 0x40
+
+
+def test_flag_values_are_unique():
+  # IntFlag silently aliases equal values: PQ_CC_ONLY once shared 256 with upstream's HAS_BSM.
+  values = [m.value for m in VolkswagenFlags.__members__.values()]
+  assert len(values) == len(set(values))
+
+
+def test_tt_subscribes_only_messages_it_has():
+  # Bus 1 as fingerprinted on a real TT Mk2 (2026-11-03 swaglog): no ACC radar, no SWA_1 blind-spot radar.
+  tt_bus1 = [1657, 640, 672, 896, 1160, 1184, 1754, 704, 1056, 1096, 1440, 866, 648, 1152, 1162, 1416, 208, 194, 800,
+             1360, 1088, 1344, 1352, 174, 416, 684, 928, 906, 1192, 1312, 976, 80, 428, 916, 1420, 1824, 946, 978, 1394,
+             1392, 912, 1504, 914, 919, 1500, 1488, 1306, 1490, 2000, 1408, 1530, 1524]
+  fingerprint = {b: {} for b in range(8)}
+  fingerprint[1] = {addr: 8 for addr in tt_bus1}
+  CP = CarInterface.get_params(CAR.AUDI_TT_MK2, fingerprint, [], False, False, False)
+  assert CP.flags & VolkswagenFlags.PQ_CC_ONLY and not CP.flags & VolkswagenFlags.HAS_BSM
+  CI = CarInterface(CP)
+  CI.update([])
+  subscribed = {addr for cp in CI.can_parsers.values() for addr in cp.message_states}
+  assert subscribed <= set(tt_bus1), sorted(hex(a) for a in subscribed - set(tt_bus1))

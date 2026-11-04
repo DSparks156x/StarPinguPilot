@@ -239,7 +239,7 @@ class VolkswagenFlags(IntFlag):
   MEB = 16
   MEB_GEN2 = 128
   # StarPinguPilot
-  PQ_CC_ONLY = 256  # Plain cruise control, no ACC radar
+  PQ_CC_ONLY = 1024  # StarPinguPilot: plain cruise control, no ACC radar. Fork-only: keep clear of upstream values
   NO_EXT_CAN = 512  # No extended CAN, everything on bus 1
 
 
