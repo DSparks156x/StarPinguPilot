@@ -7,8 +7,29 @@ from openpilot.cereal import log
 from opendbc.car.gm.cancel_remap import aol_enabled
 
 
+TT_UNWIRED_BUS_IRQ_MASK = (1 << 2) | (1 << 3) | (1 << 4)  # interruptRateCan1/2/3
+
+
+def _volkswagen_tt_mask(cp):
+  """StarPinguPilot: the Audi TT Mk2 has only powertrain CAN (bus 1). CAN0 and CAN2 do not exist on the car, the open
+  transceivers log millions of stuff errors, and the panda latches the CAN interrupt-rate diagnostics from boot on
+  every drive (StarPilot 6 ignored them). Only those three, only for the exact TT bus-1 stock-cruise profile."""
+  from opendbc.car import structs
+  from opendbc.car.volkswagen.values import CAR, VolkswagenFlags, VolkswagenSafetyFlags
+  if (cp.carFingerprint != CAR.AUDI_TT_MK2 or not int(cp.flags) & int(VolkswagenFlags.NO_EXT_CAN) or
+      cp.openpilotLongitudinalControl or len(cp.safetyConfigs) != 1):
+    return 0
+  config = cp.safetyConfigs[0]
+  if (config.safetyModel != structs.CarParams.SafetyModel.volkswagenPq or
+      not int(config.safetyParam) & int(VolkswagenSafetyFlags.PQ_NO_EXT_CAN)):
+    return 0
+  return TT_UNWIRED_BUS_IRQ_MASK
+
+
 def _diagnostic_mask(cp):
   try:
+    if cp.brand == 'volkswagen':
+      return _volkswagen_tt_mask(cp)
     if cp.brand == 'honda':
       from opendbc.car.honda.stock_aol import qualified, CLASSIC_BOSCH, RADARLESS
       if (cp.carFingerprint in CLASSIC_BOSCH and cp.openpilotLongitudinalControl) or str(cp.fingerprintSource) == 'fixed':
@@ -78,6 +99,7 @@ def blocking_fault_list(faults, cp):
     allowed = _diagnostic_mask(cp)
     named = ((log.PandaState.FaultType.interruptRateCan1, 1 << 2),
              (log.PandaState.FaultType.interruptRateCan2, 1 << 3),
+             (log.PandaState.FaultType.interruptRateCan3, 1 << 4),  # StarPinguPilot: TT, see _volkswagen_tt_mask
              (log.PandaState.FaultType.registerDivergent, 1 << 18))
     return any(not any(fault == name and allowed & bit for name, bit in named) for fault in faults)
   except (TypeError, ValueError, OverflowError):

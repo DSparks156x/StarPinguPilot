@@ -1,7 +1,7 @@
 import json
 import random
 import time
-import pyray as rl
+from openpilot.starpilot.ui.raylib import rl  # StarPilot 7's binding: gui_app textures are not pyray structs
 from opendbc.car.structs import car
 from openpilot.cereal import log
 from openpilot.system.ui.widgets import Widget
