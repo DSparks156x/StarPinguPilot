@@ -8,6 +8,8 @@ Low beam and HBA have independent validity, as the J519 contract requires:
   lowBeamValid: fresh, advancing camera AE state and a settled estimator.
   hbaValid:     a narrow-camera frame processed within HBA_STALE_S with a fresh model and a valid calibration.
                 The wide camera only adds a glare guard every WIDE_PERIOD_S; without it the HBA still works.
+                The narrow camera's staggered-HDR short exposure (CameraShortExposure) only adds a radiance measure
+                per light in the dark; without it the HBA works as before.
 The HBA runs on its own thread (HbaWorker), so its cost never slows the loop or the message's validity.
 """
 import json
@@ -27,6 +29,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.starpilot.system.lightd.ambient import AmbientEstimator, CameraSample
 from openpilot.starpilot.system.lightd.hba import HbaClassifier, HbaOut, Nv12Frame, REASON_FAULT
+from openpilot.starpilot.system.lightd.short_exposure import ShortExposureReader
 from openpilot.starpilot.system.lightd.solar import solar_position
 
 MODE_OFF, MODE_SHADOW, MODE_LOW_BEAM, MODE_LOW_AND_HIGH_BEAM = range(4)  # same as opendbc volkswagen/fla.py
@@ -135,6 +138,7 @@ class HbaRunner:
     self.client = None
     self.wide_client = None
     self.use_wide = wide
+    self.short = ShortExposureReader()
     self.clf = HbaClassifier()
     self.last_run = -math.inf
     self.last_wide_run = -math.inf
@@ -200,9 +204,10 @@ class HbaRunner:
       if wf is not None and abs(int(wide_id) - int(frame_id)) <= WIDE_MAX_FRAME_LAG:
         wide, wide_euler = wf, list(calib.wideFromDeviceEuler)
         self.last_wide_run = ctx.now
+    short = self.short.matching(int(frame_id)) if valid and ctx.dark else None
     out = self.clf.update(ctx.now, frame, model_dict(md) if valid else None, list(calib.rpyCalib) if calibrated else None,
                           height, ctx.v_ego, dark=ctx.dark, valid=valid, high_beam_on=ctx.high_beam_on, ang_vel=ctx.ang_vel,
-                          speed_limit=ctx.speed_limit, wide=wide, wide_euler=wide_euler)
+                          speed_limit=ctx.speed_limit, wide=wide, wide_euler=wide_euler, short=short)
     self.last_run = ctx.now
     self.last_frame_id = int(frame_id)
     return HbaResult(ctx.now, out, self.last_frame_id, (time.monotonic() - t0) * 1e3)
@@ -271,6 +276,7 @@ class LightD:
     self.hba = hba or HbaWorker(HbaRunner(wide=not wide_disabled))
     self.last_frame = {"wideRoadCameraState": -1, "narrowRoadCameraState": -1}
     self.last_sample: dict[str, CameraSample | None] = {"wideRoadCameraState": None, "narrowRoadCameraState": None}
+    self.last_logged_hba = None  # the HbaResult whose lights were last logged: each HBA frame's list goes out once
 
   def submaster(self):
     # No average-rate check on the poll service: it would measure this loop, not the cameras. Camera freshness is
@@ -335,6 +341,20 @@ class LightD:
     ls.hbaClearForS = float(ho.clear_for_s) if ho else 0.0
     ls.hbaFrameId = res.frame_id if res else 0
     ls.hbaProcessingMs = float(res.processing_ms) if res else 0.0
+    if ho is not None and res is not self.last_logged_hba:
+      # every light the HBA tracked on frame hbaFrameId, once per HBA frame (lightd publishes ~2x as often)
+      self.last_logged_hba = res
+      ls.shortExposureValid = bool(ho.short_valid)
+      lights = ho.lights
+      ls.lightTrackId = [int(x.tid) & 0xFFFFFFFF for x in lights]
+      ls.lightU = [float(x.u) for x in lights]
+      ls.lightV = [float(x.v) for x in lights]
+      ls.lightArea = [min(int(x.area), 65535) for x in lights]
+      ls.lightRed = [bool(x.red) for x in lights]
+      ls.lightShortPeak = [float(x.short_peak) for x in lights]
+      ls.lightEvidence = [float(x.evidence) for x in lights]
+      ls.lightKind = [x.kind for x in lights]
+      ls.lightLamp = [bool(x.lamp) for x in lights]
     for field, svc in (("wideFrameAgeMs", "wideRoadCameraState"), ("narrowFrameAgeMs", "narrowRoadCameraState")):
       s = self.last_sample[svc]
       setattr(ls, field, float((now - s.t) * 1e3) if s is not None else -1.0)

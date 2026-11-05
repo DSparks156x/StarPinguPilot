@@ -1181,3 +1181,26 @@ but every stagger table available (comma's 2024 `cc3550df2a`, draft PR commaai/o
 which changes openpilot's night frames. RAW12 stagger at 20 fps full-res exceeds the 776 Mbps lanes. Details, kernel
 citations and datasheet questions: `CAMERA_HDR.md`. `LOG_RAW_FRAMES` derefs an unset `cur_camera_buf` on IFE-processed
 cameras and would crash camerad. Don't use it.
+
+## 17. Radiance from the staggered-HDR short exposure (2026-11-04)
+
+camerad can now send a fixed 64-line (1.27 ms, gain 1x) RAW10 short exposure of each road camera next to the processed
+frame (`CameraShortExposure`, off by default; `CAMERA_HDR.md` §11). The long exposure clips lamps and lit signs alike, and
+every sign rule so far (crisp ring, glow ratio, switch-on birth, beam follow) infers from the clipped image what the short
+exposure measures directly: radiance. A retroreflector returns a fraction of our own beam, and that fraction drops steeply with
+the observation angle, so a lit sign stays dim in the short frame at any range; a lamp's core is a source. How `hba.py` uses it
+(`HbaParams.short_*`, `CAMERA_HDR.md` §12):
+
+- each blob gets `short_peak`, the brightest raw count above black under its box (processed (u, v) = raw (2u, 2v));
+- **lamp:** a white track whose median short peak over its last 5 frames (at least 3 with a short exposure) is
+  `>= short_lamp_peak` is a source. The reflector rules (switch-on birth, beam follow, compact glow, post shape) and the static
+  vote no longer apply to it; the geometric ones (roadside, high, motion) still do. Its evidence builds at `ev_lamp` (two
+  frames) at least, with or without our high beam, and a dip for it doesn't back off the next restore;
+- **sign:** a white track whose core is `>= short_sign_min_area` px on every such frame and whose short peak never exceeds
+  `short_sign_peak` is static "short" (unless it shows a lamp partner or oncoming motion), and the glare override leaves it;
+- small dim dots are left to the rules: a far car's lamp can be as dim as a delineator our beam lights;
+- taillights are left alone: they are as dim as the red reflectors our beam lights.
+
+Without a short exposure (param off, replay, a missed frame) everything is as before; the tests cover both. The thresholds are
+physics estimates, not measurements: every light's short peak is now logged (`starpilotLightState.light*`, once per HBA frame),
+and `tools/short_peaks.py` prints its percentiles by kind and beam state. The first night drive with the param on sets them.

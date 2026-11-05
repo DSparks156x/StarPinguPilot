@@ -18,6 +18,10 @@ Pipeline:
      are reflectors until they show what a sign can't: a lamp pair or oncoming motion. The high beam lights a far
      sign 5-10x brighter, so without this the restore itself creates the next "strong lamp" (route 5a flashed at
      signs every 2.6 s).
+  4b. radiance, when camerad runs staggered HDR (CameraShortExposure): the long exposure clips lamps and lit signs
+     alike, the fixed ~1.3 ms short exposure doesn't. A retroreflector returns a fraction of our own beam and stays
+     dim in it at any range; a lamp's core is a source and stays bright. A light measured brighter than any lit sign
+     can be is a lamp, whatever the reflector rules say; a big burnt-out blob measured dim is a sign (SHORT_* params).
   5. decision (HbaPolicy): each track builds up evidence at a rate set by what it shows (after Gentex SmartBeam's
      per-light index): a model lead, a wide-camera lamp, measured oncoming motion or a bright near lamp dip on their
      first frame, a far bright light in two frames, but under our own high beam (which lights far signs to the same
@@ -261,6 +265,22 @@ class HbaParams:
                                     # off, where the corridor's near end reaches up to. Route 46: those 7-10 m, cars in
                                     # curves 12-18 m (the model's road stops short of where they are).
   wide_hold_s: float = 0.3          # a hit holds the threat this long: the wide frame is only looked at every WIDE_PERIOD_S
+  # radiance from the staggered-HDR short exposure (short_exposure.py: 64 lines = 1.27 ms at gain 1x, RAW10, so a count
+  # is the same radiance on every frame; at night the long exposure is ~2270 lines x gain ~1.4, ~50x longer, so one
+  # count above black is ~1/20 of what clips the long frame). Physics, not yet measured at night (CAMERA_HDR.md §12):
+  # a lit sign's face clips the long frame only just (its glow ends at its edge, section 13 of DESIGN.md): ~1-3x the
+  # clip level, 20-60 counts. Retroreflection falls steeply with the observation angle, so near signs and delineators
+  # don't get brighter than that. A lamp whose long-frame core is >= 30 px is >= 10x over the clip level at its peak
+  # (its flare reaches 4-5 core radii at Y 70), >= 200 counts; far unresolved headlights fade with distance squared
+  # (~100-300 counts at 150 m), far delineators with its fourth power (a few counts at 100 m).
+  short_lamp_peak: float = 192.0    # median short peak at or above this: a lamp (white lights only: taillights are as
+                                    # dim as the red reflectors our beam lights)
+  short_sign_peak: float = 64.0     # a big burnt-out white blob whose short peak never exceeds this is a lit surface...
+  short_sign_min_area: int = 30     # ...when its long-frame core is at least this big (a resolved surface; a small far
+                                    # dot this dim is as likely a far car)
+  short_min_obs: int = 3            # of the last 5 frames, this many must have a short exposure to say either
+  ev_lamp: float = 6.0              # a measured lamp builds evidence at least this fast (two frames), with or without
+                                    # our high beam: the slow far rates exist because a sign can look the same, not this
 
 
 @dataclass
@@ -278,6 +298,7 @@ class Blob:
   partner: bool = False # the first of those only: a wide blob is also what a sign lit by our beam looks like
   glow: float = math.inf  # area at Y >= glow_y connected to the core / core area (inf: not measured or spreading wide)
   post: bool = False    # tall white rectangle without a partner: delineator reflector, not a lamp
+  short_peak: float = math.nan  # brightest short-exposure count above black under it (nan: no short exposure)
 
 
 class Obs(NamedTuple):
@@ -301,6 +322,7 @@ class Obs(NamedTuple):
   bend: float = 0.0      # off to our side at its range: how much farther out its ray is still at lamp height over our
                          # two lanes (x its range). Past roadside_bend_k the road bends that way and it can be a car on it.
                          # Only looked at for would-be roadside lights, 0 otherwise.
+  short_peak: float = math.nan  # Blob.short_peak
 
 
 @dataclass
@@ -338,6 +360,22 @@ class Track:
     recent = [h for h in self.hist if h.t >= self.hist[-1].t - p.pair_window_s]
     return sum(h.partner for h in recent) >= p.pair_min
 
+  def _short_recent(self, p):
+    """The last 5 white observations that had a short exposure, or [] if fewer than short_min_obs."""
+    recent = [h for h in self.hist[-5:] if not h.red and math.isfinite(h.short_peak)]
+    return recent if len(recent) >= p.short_min_obs else []
+
+  def short_lamp(self, p):
+    """The short exposure says it's a source: brighter than any sign our beams can light."""
+    recent = self._short_recent(p)
+    return bool(recent) and self.red_frac <= 0.5 and median(np.array([h.short_peak for h in recent])) >= p.short_lamp_peak
+
+  def short_sign(self, p):
+    """The short exposure says it's a lit surface: a big burnt-out core that is dim on every short frame."""
+    recent = self._short_recent(p)
+    return (bool(recent) and self.red_frac <= 0.5 and all(h.short_peak <= p.short_sign_peak for h in recent)
+            and all(h.area >= p.short_sign_min_area for h in recent))
+
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
       return False
@@ -353,7 +391,7 @@ class Track:
     o = self.hist[-1]
     far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
     return TrackView(self.tid, o.u, o.v, self.kind, self.why, self.strong(p), self.is_threat(p), not far,
-                     self.paired_recent(p), self.reflector, o.area, self.partner_recent(p))
+                     self.paired_recent(p), self.reflector, o.area, self.partner_recent(p), self.short_lamp(p))
 
 
 class TrackView(NamedTuple):
@@ -371,6 +409,20 @@ class TrackView(NamedTuple):
   reflector: bool
   area: float = 0.0
   partner: bool = False  # paired by a second blob on its row (not by being one wide blob) on pair_min frames
+  lamp: bool = False     # Track.short_lamp: the short exposure measured a source
+
+
+class HbaLight(NamedTuple):
+  """One tracked light on this frame, for the log (starpilotLightState light* lists)."""
+  tid: int
+  u: float
+  v: float
+  area: int
+  red: bool
+  short_peak: float
+  evidence: float
+  kind: str     # "kind/why"
+  lamp: bool
 
 
 @dataclass
@@ -389,6 +441,8 @@ class HbaOut:
   town_lights: float = 0.0  # mean town lights per frame over town_window_s
   n_wide: int = 0           # lamps the wide-camera guard saw (its last look, while it holds)
   evidence: float = 0.0     # the highest track evidence (1 = dip)
+  short_valid: bool = False  # this frame came with its staggered-HDR short exposure
+  lights: list = field(default_factory=list)  # HbaLight per track seen on this frame
 
 
 class Geometry:
@@ -1024,6 +1078,11 @@ class HbaPolicy:
     p = self.p
     if tv.kind == KIND_STATIC:
       return p.ev_static
+    r = self._rules_rate(tv, high_beam_on)
+    return max(r, p.ev_lamp) if tv.lamp else r
+
+  def _rules_rate(self, tv: TrackView, high_beam_on):
+    p = self.p
     if tv.kind == KIND_ONCOMING and tv.why == "motion":
       return p.ev_motion
     if tv.strong:
@@ -1072,7 +1131,8 @@ class HbaPolicy:
       out.evidence = max(ev.values(), default=0.0)
       dipping = [tv for tv in views if ev[tv.tid] >= 1.0]
       confident = model_lead or wide_threat or bool(dipping)
-      sure = model_lead or wide_threat or any(tv.kind == KIND_ONCOMING and tv.why == "motion" for tv in dipping)
+      # a measured lamp isn't the sign our restore lit either: no backoff for it
+      sure = model_lead or wide_threat or any((tv.kind == KIND_ONCOMING and tv.why == "motion") or tv.lamp for tv in dipping)
     else:
       live = [tv for tv in views if tv.threat]
       # a threat we're sure of (model lead, a big lamp, oncoming motion) dips on its first frame...
@@ -1233,7 +1293,7 @@ class HbaClassifier:
       reach = lamp_reach(geom, b.u, b.v, center, lanes if p.oncoming_side < 0 else lanes[::-1], p)
       bend = reach / dist if math.isfinite(reach) else 0.0
     return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner,
-               b.glow < p.glow_ratio, bend)
+               b.glow < p.glow_ratio, bend, b.short_peak)
 
   def _beam_check(self, tr: Track):
     """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
@@ -1254,7 +1314,9 @@ class HbaClassifier:
     self._classify_frame(tr, v_ego, center)
     t = tr.hist[-1].t
     tr.votes = [v for v in tr.votes if v[0] >= t - p.static_vote_s] + [(t, tr.kind == KIND_STATIC)]
-    vehicle = tr.kind == KIND_ONCOMING or (tr.strong(p) and tr.hist[-1].paired)
+    # a measured lamp is left to this frame's rules: earlier frames may have voted it a sign before the short exposure
+    # had a say, and the geometric ones (roadside, high, motion) still decide on every frame
+    vehicle = tr.kind == KIND_ONCOMING or (tr.strong(p) and tr.hist[-1].paired) or tr.short_lamp(p)
     if (tr.kind != KIND_STATIC and not vehicle and len(tr.votes) >= 3
         and sum(v[1] for v in tr.votes) >= p.static_vote_frac * len(tr.votes)):
       tr.kind, tr.why = KIND_STATIC, "vote"
@@ -1262,8 +1324,9 @@ class HbaClassifier:
     last = tr.hist[-1]
     oncoming_side = not np.isfinite(last.angle) or p.oncoming_side * last.angle > -p.glare_side_deg
     if (tr.strong(p) and not last.red and not last.high and not last.post and oncoming_side and tr.kind == KIND_STATIC
-        and not tr.reflector and tr.why != "sign"):  # a light that followed our own switching, or whose glow ends at
-                                                     # its edge, is a sign, however bright
+        and not tr.reflector and tr.why not in ("sign", "short")):  # a light that followed our own switching, whose
+                                                     # glow ends at its edge, or that is dim in the short exposure, is a
+                                                     # sign, however bright
       tr.kind, tr.why = KIND_ONCOMING, "glare"
 
   def _classify_frame(self, tr: Track, v_ego, center):
@@ -1274,6 +1337,11 @@ class HbaClassifier:
     any_red = red or last.red
     if not tr.reflector and self._beam_switches:
       self._beam_check(tr)
+    lamp = tr.short_lamp(p)
+    if lamp:
+      # brighter than a sign can be: a source, even one that showed up with our switch-on. The reflector rules below
+      # (switch-on, compact glow, post shape, short-dim) don't apply to it; the geometric ones do
+      tr.reflector = False
     if tr.reflector:
       # it lit up with our beam: a sign, until it shows what a sign can't, a lamp pair or oncoming motion
       tr.obj_speed = self._motion_fit(tr, v_ego)
@@ -1284,14 +1352,17 @@ class HbaClassifier:
         tr.kind, tr.why = KIND_STATIC, "beam"
         return
     recent = tr.hist[-5:]
-    if sum(h.compact for h in recent) * 2 > len(recent) and sum(h.partner for h in recent) < 3:
-      # its glow ends at its edge: a sign our beams light, not a lamp (unless it shows a lamp pair, or moves at us)
+    for why, surface in (("sign", sum(h.compact for h in recent) * 2 > len(recent)), ("short", tr.short_sign(p))):
+      # its glow ends at its edge, or it is dim in the short exposure: a sign our beams light, not a lamp (unless it
+      # shows a lamp pair, or moves at us)
+      if lamp or not surface or sum(h.partner for h in recent) >= 3:
+        continue
       tr.obj_speed = self._motion_fit(tr, v_ego)
       if not (np.isfinite(tr.obj_speed) and tr.obj_speed > p.oncoming_speed):
         tr.obj_speed = float("nan")
-        tr.kind, tr.why = KIND_STATIC, "sign"
+        tr.kind, tr.why = KIND_STATIC, why
         return
-    if sum(h.post for h in recent) * 2 > len(recent):  # unpaired and tall, however bright: lamps are round or wide
+    if not lamp and sum(h.post for h in recent) * 2 > len(recent):  # unpaired and tall: lamps are round or wide
       tr.obj_speed = float("nan")
       tr.kind, tr.why = KIND_STATIC, "post"  # delineator post
       return
@@ -1384,11 +1455,12 @@ class HbaClassifier:
     return self._town or limit_town, density
 
   def update(self, t, frame, model, rpy_calib, height, v_ego, dark=True, valid=True, high_beam_on=None,
-             ang_vel=None, speed_limit=None, wide=None, wide_euler=None) -> HbaOut:
+             ang_vel=None, speed_limit=None, wide=None, wide_euler=None, short=None) -> HbaOut:
     """frame: the narrow-camera image, BGR array or Nv12Frame. high_beam_on: our high beam as the car reports it,
     None if unknown. ang_vel: device-frame angular velocity (rad/s, deviceMotion), None if unknown. speed_limit: the
     posted limit (m/s, mapd), None or 0 if unknown. wide: a wide-camera Nv12Frame from about the same time, only on
-    the frames the wide guard should look (its hits hold for wide_hold_s), with extrinsicsCalibration.wideFromDeviceEuler."""
+    the frames the wide guard should look (its hits hold for wide_hold_s), with extrinsicsCalibration.wideFromDeviceEuler.
+    short: the same frame's staggered-HDR short exposure (short_exposure.ShortFrame), None without one."""
     p, out = self.p, HbaOut()
     r_rel = self._ego_rotation(t, ang_vel)
     if not valid or model is None or rpy_calib is None:
@@ -1405,6 +1477,10 @@ class HbaClassifier:
       red_mask, red_box = corridor_mask(geom, center, p, p.adjacent_lane_width, with_box=True)
       box = union_box(mask_box, red_box)
     blobs = find_blobs(frame, mask, p, red_mask, box)
+    if short is not None:
+      for b in blobs:
+        b.short_peak = short.peak(b.bbox)
+    out.short_valid = short is not None
     self.last_mask, self.last_blobs, self.last_center, self.last_geom = mask, blobs, center, geom
     self._associate(t, blobs, geom, center, r_rel)
     # by day the sky between the trees is bright and pale too: count only in the dark
@@ -1419,8 +1495,14 @@ class HbaClassifier:
     lead = max(((pr, x) for pr, x, _ in model["leads"]), default=(0.0, 0.0))
     out.lead_prob = lead[0]
     model_lead = lead[0] > p.lead_prob and lead[1] < p.lead_max_x
-    views = [tr.view(p) for tr in self.tracks if tr.missed == 0]
-    return self.policy.step(t, out, views, model_lead, wide_threat, v_ego, dark, bool(self._beam))
+    live = [tr for tr in self.tracks if tr.missed == 0]
+    views = [tr.view(p) for tr in live]
+    self.policy.step(t, out, views, model_lead, wide_threat, v_ego, dark, bool(self._beam))
+    ev = self.policy.ev
+    out.lights = [HbaLight(tr.tid, tv.u, tv.v, int(tv.area), bool(tr.hist[-1].red), tr.hist[-1].short_peak,
+                           ev[tv.tid][0] if tv.tid in ev else float(tv.threat), f"{tv.kind}/{tv.why}", tv.lamp)
+                  for tr, tv in zip(live, views, strict=True)]
+    return out
 
   def _wide_update(self, t, wide, wide_euler, model, rpy_calib, height, narrow: Geometry, dark):
     """Looks at the wide frame if there is one. Returns whether a wide lamp threatens (held for wide_hold_s)."""

@@ -1,9 +1,10 @@
 # Short-exposure frames for lightd (comma 4 / OS04C10 stagger HDR)
 
-Status: **implemented, not yet run on a device** (2026-11-04, section 11), behind the param `CameraShortExposure`, off
-by default. Sections 1-10 are the investigation from 2026-10-24 (tree `pingu` @ f9f5507015, before the StarPilot 7 port:
-paths there are relative to `openpilot/`). The verdict was medium-hard because the stagger mode makes openpilot's road
-frames RAW10. The user chose to build it anyway: telling headlights from signs needs a short exposure.
+Status: **implemented and brought up on the comma 4, parked indoors** (2026-11-04, section 11); **lightd's HBA reads it**
+(section 12), behind the param `CameraShortExposure`, off by default. Not driven yet. Sections 1-10 are the investigation from
+2026-10-24 (tree `pingu` @ f9f5507015, before the StarPilot 7 port: paths there are relative to `openpilot/`). The verdict was
+medium-hard because the stagger mode makes openpilot's road frames RAW10. The user chose to build it anyway: telling
+headlights from signs needs a short exposure.
 
 ## 1. The question
 
@@ -313,8 +314,8 @@ copies the long gain into `0x350c/d`, so a short frame's brightness means the sa
 **Delivery.** New VisionIPC streams `VISION_STREAM_NARROW_SHORT = 4` and `VISION_STREAM_WIDE_SHORT = 5` (`cereal/visionstream.h`,
 `cereal/visionipc.py`). They carry the same frame id and SOF/EOF as the processed frame. They're not registered with
 encoderd/loggerd, so nothing is logged. lightd reads them with `starpilot/system/lightd/short_exposure.py`
-(`ShortExposureReader`, `unpack_raw10`, `bin_bayer`; tests in `starpilot/system/tests/test_lightd_short_exposure.py`).
-`hba.py` doesn't use them yet.
+(`ShortExposureReader`, `ShortFrame`, `unpack_raw10`, `bin_bayer`; tests in
+`starpilot/system/tests/test_lightd_short_exposure.py`). `hba.py` uses the narrow one (section 12).
 
 **Self-disabling.** manager doesn't restart a native process that exits, so camerad handles failure itself. On any of
 these, it sets `CameraShortExposure` to false, logs why (`staggered HDR failed: ...`), closes every camera and
@@ -383,3 +384,42 @@ Still open:
 - modeld and DM running with the param on (needs onroad);
 - the cabin camera's +23.5 vs +25 ms behaviour if the VCs were ever wrong (the sync check covers it);
 - `readout_time_ns`.
+
+## 12. How lightd uses it (2026-11-04)
+
+**Pairing.** `HbaRunner` asks `ShortExposureReader.matching(frame_id)` for the short exposure of the narrow frame it is about
+to classify, only while valid and dark. camerad sends it right after the processed frame, so the reader drains the stream and
+waits up to 5 ms for it; a different frame id means none for this frame. While camerad serves the stream with no buffers
+(linear mode, or after a fallback), the reader looks again every 5 s. The frame stays packed (`ShortFrame`): only the raw box
+under each blob is unpacked, `RAW_SCALE` = 2 raw px per processed px, no crop or flip (checked on the device, section 11).
+
+**The measure.** `ShortFrame.peak(bbox)`: the brightest raw count above black (16) under the blob's box grown by 1 px, on any
+colour channel. The short exposure's lines and gain are fixed, so a count is the same radiance on every frame and doesn't
+depend on the AE. At night the long exposure is ~2270 lines x gain ~1.4, ~50x the short one, so ~20 counts is the radiance that
+just clips the long frame.
+
+**Thresholds** (`HbaParams.short_lamp_peak` 192, `short_sign_peak` 64, `short_sign_min_area` 30), from physics until a night
+drive measures them:
+- a lit sign's face clips the long frame only just (its glow ends at its edge, DESIGN.md section 13): ~1-3x the clip level,
+  20-60 counts. Retroreflectance falls steeply with the observation angle (the camera sits ~0.6 m above our lamps), so near
+  signs and delineators don't get brighter than that;
+- a lamp whose long-frame core is >= 30 px saturated is >= 10x over the clip level at its peak (its flare still reaches Y 70
+  4-5 core radii out), so >= 200 counts;
+- unresolved far lamps fade with distance squared (~100-300 counts at 150 m), far delineators with its fourth power (a few
+  counts at 100 m). Small dim dots are therefore left to the existing rules: a far car can be as dim as a lit delineator.
+
+What the HBA does with it is in DESIGN.md section 17. If the measured sign and lamp distributions overlap the thresholds, move
+the thresholds, not the rules.
+
+**Logging.** `starpilotLightState` carries every tracked light of each HBA frame once (`lightTrackId`, `lightU/V`, `lightArea`,
+`lightRed`, `lightShortPeak`, `lightEvidence`, `lightKind` = "kind/why", `lightLamp`) and `shortExposureValid`. The raw short
+frames aren't logged. `starpilot/system/lightd/tools/short_peaks.py <route dir>` prints short-peak percentiles by kind, our
+beam and core size, and writes a per-light CSV for hindsight labelling (`hba_tools/score.py`).
+
+**Next, in order:**
+1. Push, let CI rebuild camerad (VC defaults and the 20 ms wait are in 9d9d33dbba), update the comma.
+2. Parked at night, param on: `short_exposure_dump.py` with our high beam on a sign and another car's headlights in view.
+   Expect the sign at tens of counts and the headlights in the hundreds or clipped.
+3. A night drive in mode 1 (shadow) with the param on, checking modeld, DM and camerad stay healthy (section 11, phase 5).
+   Then `short_peaks.py` on it, and set the thresholds from the distributions before mode 3.
+4. The wide guard could use `VISION_STREAM_WIDE_SHORT` the same way (its ring test is the same lamps-bloom guess); not done.

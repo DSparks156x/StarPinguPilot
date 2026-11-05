@@ -6,7 +6,7 @@ import numpy as np
 import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 from openpilot.starpilot.system.lightd import lightd as L
-from openpilot.starpilot.system.lightd.hba import ECAM_H, ECAM_W, FCAM_H, FCAM_W, Nv12Frame
+from openpilot.starpilot.system.lightd.hba import ECAM_H, ECAM_W, FCAM_H, FCAM_W, HbaLight, Nv12Frame
 
 DT = 0.05
 GPS = "gpsLocation"
@@ -20,11 +20,19 @@ class NoParams:
     return False
 
 
+class FakeShort:
+  """No staggered HDR: camerad serves no short exposure."""
+
+  def matching(self, frame_id):
+    return None
+
+
 class FakeCameraRunner(L.HbaRunner):
   """The real runner and classifier on a dark synthetic frame instead of VisionIPC. `hang` stalls the classifier."""
 
   def __init__(self, wide=True):
     super().__init__(wide)
+    self.short = FakeShort()
     self.frame_id = 0
     self.wide_calls = 0
     self.hang = threading.Event()
@@ -190,3 +198,26 @@ def test_wide_guard_looks_at_its_own_rate_in_the_dark():
 def test_disable_wide_road_turns_the_wide_guard_off():
   assert L.LightD(True, GPS, L.SolarTracker(NoParams())).hba.runner.use_wide is False
   assert L.LightD(False, GPS, L.SolarTracker(NoParams())).hba.runner.use_wide is True
+
+
+
+def test_lights_are_logged_once_per_hba_frame():
+  runner = FakeCameraRunner()
+  ld = L.LightD(False, GPS, L.SolarTracker(NoParams()), L.HbaWorker(runner))
+  sm = ld.submaster()
+  logged = []
+  real = runner.clf.update
+
+  def with_a_light(*a, **kw):
+    out = real(*a, **kw)
+    out.lights = [HbaLight(7, 600.0, 400.0, 30, False, 42.0, 0.5, "candidate/colour", False)]
+    return out
+  runner.clf.update = with_a_light
+  outs = drive(ld, sm, runner, L.MODE_SHADOW, 0.0, 3.0, on_step=lambda t, ls: logged.append(ls.starpilotLightState))
+  ids = [s.hbaFrameId for s in logged if len(s.lightTrackId)]
+  assert ids and len(ids) == len(set(ids)), "each HBA frame's lights go out once"
+  assert len(ids) < len(logged), "lightd publishes more often than the HBA runs"
+  s = next(s for s in logged if len(s.lightTrackId))
+  assert list(s.lightTrackId) == [7] and list(s.lightShortPeak) == [42.0] and list(s.lightKind) == ["candidate/colour"]
+  assert s.lightArea[0] == 30 and s.lightU[0] == 600.0 and not s.lightLamp[0] and not s.lightRed[0]
+  assert not s.shortExposureValid and outs[-1][2].valid

@@ -264,6 +264,18 @@ struct StarPilotCarState @0xf35cc4560bbf6ec2 {
     wideFrameAgeMs @27 :Float32;
     narrowFrameAgeMs @28 :Float32;
     hbaProcessingMs @29 :Float32;
+
+    # every light the HBA tracked on frame hbaFrameId, filled once per HBA frame (empty on the messages in between)
+    shortExposureValid @30 :Bool;  # that frame came with its staggered-HDR short exposure (CameraShortExposure)
+    lightTrackId @31 :List(UInt32);
+    lightU @32 :List(Float32);  # narrow-camera px (1344x760)
+    lightV @33 :List(Float32);
+    lightArea @34 :List(UInt16);  # px at Y >= 225 (or red)
+    lightRed @35 :List(Bool);
+    lightShortPeak @36 :List(Float32);  # brightest short-exposure RAW10 count above black under it, NaN without one
+    lightEvidence @37 :List(Float32);  # HbaPolicy evidence, 1 = dip
+    lightKind @38 :List(Text);  # "kind/why", e.g. "oncoming/motion", "static/short"
+    lightLamp @39 :List(Bool);  # the short exposure measured a source
   }
 
   struct ToyotaCruise {
