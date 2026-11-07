@@ -21,7 +21,21 @@ def test_never_leaves_best_network_or_hotspot_or_disconnected_state():
   visible = {"Stadium Walk-UF104": 67, "Social at Stadium Walk": 90}
   assert choose(SAVED, HOME.uuid, visible, {}, 0.) is None
   assert choose(SAVED, TETHER.uuid, visible, {}, 0.) is None
-  assert choose(SAVED, None, visible, {}, 0.) is None
+  assert choose(SAVED, None, visible, {}, 0.) is None  # NetworkManager may still be connecting
+  assert choose(SAVED, "u-unsaved", visible, {}, 0.) is None
+
+
+def test_joins_best_network_after_wifi_stays_down():
+  # NetworkManager stops retrying after a few failures, e.g. a fringe signal from the car
+  visible = {"Stadium Walk-UF104": 45, "Social at Stadium Walk": 90}
+  assert choose(SAVED, None, visible, {}, 0., disconnected_long=True) == HOME
+  assert choose(SAVED, None, {"Social at Stadium Walk": 90}, {}, 0., disconnected_long=True) == SOCIAL
+  assert choose(SAVED, None, {"weedle-de6b": 90}, {}, 0., disconnected_long=True) is None
+  assert choose(SAVED, None, {}, {}, 0., disconnected_long=True) is None
+
+
+def test_weak_home_still_beats_fallback():
+  assert choose(SAVED, SOCIAL.uuid, {"Stadium Walk-UF104": 25, "Social at Stadium Walk": 90}, {}, 0.) == HOME
 
 
 def test_picks_highest_priority_and_backs_off_after_failure():
