@@ -64,7 +64,8 @@ class VolkswagenStockCardIntent(AolCardIntent):
     self.physical_eps_pause = False
     self.eps_recovery_ns = 0
     self.main_seen = False
-    self.main_startup_pending = not pq_qualified(cp)  # StarPinguPilot: PQ needs main seen off first
+    self.pq = pq_qualified(cp)  # StarPinguPilot
+    self.main_startup_pending = not self.pq  # PQ needs main seen off first
     self.main_available = False
     self.main_neutral = False
     self.main_pulse = False
@@ -92,6 +93,8 @@ class VolkswagenStockCardIntent(AolCardIntent):
       if event.type == ButtonType.mainCruise and self.settings.main_action != AOL_TOGGLE:
         if event.pressed:
           self._perform(self.settings.main_action)
+      elif self.pq and event.type == ButtonType.cancel:
+        pass  # StarPinguPilot: Cancel keeps lateral, as on StarPilot 6. The main switch owns the latch.
       else:
         events.append(structs.CarState.ButtonEvent(**event.to_dict()))
     available = bool(state.cruiseState.available)

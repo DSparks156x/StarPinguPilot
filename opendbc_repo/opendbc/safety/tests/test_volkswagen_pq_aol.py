@@ -93,15 +93,51 @@ class TestVolkswagenPqAol(unittest.TestCase):
     self.feed()  # cancelling cruise keeps lateral, like StarPilot 6
     assert self.safety.aol_get_permission_mask() == 1
 
-  def test_temporary_conditions_deny_but_keep_arm(self):
+  def test_only_host_request_denies_while_armed(self):
+    # StarPilot 6 conditions: stops, reverse and a busy EPS are the host's to pause. A denial reads as a disarm there.
     self.configure()
     self.arm()
-    for kwargs in ({"moving": False}, {"reverse": True}, {"eps": 4}, {"eps": 1}, {"request": 0}):
+    for kwargs in ({"moving": False}, {"reverse": True}, {"eps": 4}, {"eps": 1}, {"brake": True, "cancel": True}):
       self.feed(**kwargs)
-      assert self.safety.aol_get_permission_mask() == 0, kwargs
-      self.feed()
       assert self.safety.aol_get_permission_mask() == 1, kwargs
-    self.feed(brake=True, cancel=True)
+    self.feed(request=0)
+    assert self.safety.aol_get_permission_mask() == 0
+    self.feed()
+    assert self.safety.aol_get_permission_mask() == 1
+
+  def test_main_cycle_without_heartbeat_arms(self):
+    # 2026-11-06 drive: idle AOL has no heartbeat until the host sees the same edge, then one refused request disarmed it
+    self.configure()
+    self.safety.set_aol_test_heartbeat(False)
+    for _ in range(12):
+      self.feed(main=False, request=0)
+    self.feed(request=0)
+    assert self.safety.aol_get_permission_mask() == 0
+    self.safety.set_aol_test_heartbeat(True)
+    self.feed()
+    assert self.safety.aol_get_permission_mask() == 1
+
+  def test_stock_engagement_before_heartbeat_arms(self):
+    # 2026-11-06 drive: cruise engages first, the host heartbeat follows; the arm must survive that gap
+    self.configure()
+    self.safety.set_aol_test_heartbeat(False)
+    for _ in range(12):
+      self.feed(request=0)
+    for _ in range(5):
+      self.feed(engaged=True, request=0)
+    assert self.safety.get_controls_allowed()
+    self.safety.set_aol_test_heartbeat(True)
+    self.feed(engaged=True)
+    assert self.safety.aol_get_permission_mask() == 1
+
+  def test_heartbeat_gap_keeps_arm(self):
+    self.configure()
+    self.arm()
+    self.safety.set_aol_test_heartbeat(False)
+    self.feed()
+    assert self.safety.aol_get_permission_mask() == 0
+    self.safety.set_aol_test_heartbeat(True)
+    self.feed()
     assert self.safety.aol_get_permission_mask() == 1
 
   def test_eps_fault_disarms(self):
@@ -114,7 +150,7 @@ class TestVolkswagenPqAol(unittest.TestCase):
       assert self.safety.aol_get_permission_mask() == 0
 
   def test_each_source_missing_or_wrong_bus_expires(self):
-    for name in ("Lenkhilfe_2", "Gate_Komf_1", "Motor_5"):
+    for name in ("Lenkhilfe_2", "Motor_5"):
       for kwargs in ({"omit": name}, {"wrong_bus": name}):
         self.configure()
         self.arm()

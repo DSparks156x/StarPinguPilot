@@ -72,6 +72,23 @@ def test_main_on_at_startup_needs_off_first():
   assert owner.allowed_latch
 
 
+def test_cancel_keeps_latch_main_off_clears_it():
+  # StarPilot 6 conditions: the main switch owns lateral, the stalk's Cancel only ends stock cruise.
+  owner = aol.create_intent(tt_cp(), AolSettings(True, 5., 0, 0, (0, 0, 0), (0, 0, 0)))
+  _tick(owner, False, 0)
+  for tick in range(1, 5):
+    _tick(owner, True, tick)
+  assert owner.allowed_latch
+  state = structs.CarState(canValid=True, vEgo=20., gearShifter=structs.CarState.GearShifter.drive)
+  state.cruiseState.available = True
+  state.buttonEvents = [structs.CarState.ButtonEvent(type=structs.CarState.ButtonEvent.Type.cancel, pressed=True)]
+  owner.update(state, now_ns=1_100_000_000)
+  _tick(owner, True, 11)
+  assert owner.allowed_latch
+  _tick(owner, False, 12)
+  assert not owner.allowed_latch
+
+
 def test_native_matches_cp_tt():
   CP = tt_cp()
   assert native_matches_cp(CP, PQ_MODEL, CP.safetyConfigs[-1].safetyParam)
