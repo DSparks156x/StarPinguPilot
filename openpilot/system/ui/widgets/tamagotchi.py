@@ -170,7 +170,7 @@ class TamagotchiWidget(Widget):
       return "drunk", False
 
     lead = sm["radarState"].leadOne
-    if lead.status and cs.vEgo > TAILGATE_MIN_SPEED and lead.dRel / cs.vEgo < TAILGATE_GAP:
+    if lead.present and cs.vEgo > TAILGATE_MIN_SPEED and lead.dRel / cs.vEgo < TAILGATE_GAP:
       self._hold("noot", now)
     if not stopped and self._held("noot", now):
       return "noot", False
