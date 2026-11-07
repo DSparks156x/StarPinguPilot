@@ -50,6 +50,14 @@ def split_terse(line: str) -> list[str]:
   return fields
 
 
+def parse_ssid_mode(out: str) -> tuple[str, bool]:
+  """(ssid, infrastructure) from `nmcli -t -g ssid,mode connection show`, which prints one value per line."""
+  lines = out.split("\n")
+  ssid = ":".join(split_terse(lines[0]))
+  mode = lines[1].strip() if len(lines) > 1 else ""
+  return ssid, mode in ("", "infrastructure")
+
+
 def choose(connections: list[WifiConnection], active_uuid: str | None, visible: dict[str, int],
            backoff_until: dict[str, float], now: float, disconnected_long: bool = False) -> WifiConnection | None:
   """The saved network to switch to, or None. Leaves an active infrastructure connection for a higher priority one,
@@ -86,9 +94,8 @@ class NetworkManagerState:
         continue
       name, uuid, _, autoconnect, priority, active = fields
       if uuid not in self._details:
-        ssid, mode = (split_terse(nmcli("-t", "-g", "802-11-wireless.ssid,802-11-wireless.mode", "connection", "show",
-                                        "uuid", uuid).strip()) + [""])[:2]
-        self._details[uuid] = (ssid, mode in ("", "infrastructure"))
+        self._details[uuid] = parse_ssid_mode(nmcli("-t", "-g", "802-11-wireless.ssid,802-11-wireless.mode", "connection",
+                                                    "show", "uuid", uuid))
       ssid, infrastructure = self._details[uuid]
       connections.append(WifiConnection(uuid, name, ssid, int(priority or 0), autoconnect == "yes", infrastructure))
       if active == "yes":

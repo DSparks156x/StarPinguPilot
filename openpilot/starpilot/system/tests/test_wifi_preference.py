@@ -1,4 +1,4 @@
-from openpilot.starpilot.system.wifi_preference import FAILURE_BACKOFF_S, MIN_SIGNAL, WifiConnection, choose, split_terse
+from openpilot.starpilot.system.wifi_preference import FAILURE_BACKOFF_S, MIN_SIGNAL, WifiConnection, choose, parse_ssid_mode, split_terse
 
 HOME = WifiConnection("u-home", "openpilot connection Stadium Walk-UF104", "Stadium Walk-UF104", 10, True, True)
 SOCIAL = WifiConnection("u-social", "openpilot connection Social at Stadium Walk", "Social at Stadium Walk", 5, True, True)
@@ -44,6 +44,15 @@ def test_picks_highest_priority_and_backs_off_after_failure():
   backoff = {HOME.uuid: FAILURE_BACKOFF_S}
   assert choose(SAVED, PHONE.uuid, visible, backoff, 1.) == SOCIAL
   assert choose(SAVED, PHONE.uuid, visible, backoff, FAILURE_BACKOFF_S) == HOME
+
+
+def test_parse_ssid_mode_from_comma_output():
+  # 2026-11-07 on the comma: one value per line. Reading it as one ':' line gave 'Stadium Walk-UF104\ninfrastructure',
+  # which never matched the scan, so the helper never switched.
+  assert parse_ssid_mode("Stadium Walk-UF104\ninfrastructure\n") == ("Stadium Walk-UF104", True)
+  assert parse_ssid_mode("Social at Stadium Walk\ninfrastructure\n") == ("Social at Stadium Walk", True)
+  assert parse_ssid_mode("weedle-de6b\nap\n") == ("weedle-de6b", False)
+  assert parse_ssid_mode("a\\:b\n\n") == ("a:b", True)
 
 
 def test_split_terse_unescapes():
