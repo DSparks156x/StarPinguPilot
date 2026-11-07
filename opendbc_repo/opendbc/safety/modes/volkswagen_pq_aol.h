@@ -4,23 +4,20 @@
 // Same conditions as StarPilot 6: lateral with the cruise main switch on. PQ stalks latch, so a main switch already on at
 // startup needs an observed off->on cycle or a stock cruise engagement first. The arm is physical state: it never depends
 // on the heartbeat, because the host only starts its heartbeat after it sees the same edge. Permission still needs a fresh
-// host request. Stops and reverse are the host's to pause: any denial here reads as a disarm there.
+// host request. Stops, reverse and the EPS are the host's to pause.
 // Must match VolkswagenSafetyFlags.PQ_AOL in opendbc/car/volkswagen/values.py
 #define FLAG_VOLKSWAGEN_PQ_AOL 1024U
 #define VW_PQ_AOL_ALT_EXP 32U
 #define VW_PQ_AOL_FRESH_US 300000U
 
-#define MSG_LENKHILFE_2         0x3D2U   // RX from EPS, HCA status
 
 static bool vw_pq_aol_enabled = false;
 static bool vw_pq_aol_token = false;
 static bool vw_pq_aol_main_neutral = false;
 static bool vw_pq_aol_main = false;
-static bool vw_pq_aol_cruise_engaged = false;
 static bool vw_pq_aol_requested = false;
-static uint8_t vw_pq_aol_seen = 0U;  // 1 = Motor_5, 4 = Lenkhilfe_2
+static bool vw_pq_aol_main_seen = false;
 static uint32_t vw_pq_aol_main_ts = 0U;
-static uint32_t vw_pq_aol_eps_ts = 0U;
 
 static void vw_pq_aol_clear(void) {
   vw_pq_aol_token = false;
@@ -31,18 +28,14 @@ static void vw_pq_aol_reset(void) {
   vw_pq_aol_enabled = false;
   vw_pq_aol_main_neutral = false;
   vw_pq_aol_main = false;
-  vw_pq_aol_cruise_engaged = false;
   vw_pq_aol_requested = false;
-  vw_pq_aol_seen = 0U;
+  vw_pq_aol_main_seen = false;
   vw_pq_aol_main_ts = 0U;
-  vw_pq_aol_eps_ts = 0U;
 }
 
 static bool vw_pq_aol_current(void) {
-  const uint32_t now = microsecond_timer_get();
-  return (vw_pq_aol_seen == 5U) &&
-    (safety_get_ts_elapsed(now, vw_pq_aol_main_ts) <= VW_PQ_AOL_FRESH_US) &&
-    (safety_get_ts_elapsed(now, vw_pq_aol_eps_ts) <= VW_PQ_AOL_FRESH_US);
+  return vw_pq_aol_main_seen &&
+    (safety_get_ts_elapsed(microsecond_timer_get(), vw_pq_aol_main_ts) <= VW_PQ_AOL_FRESH_US);
 }
 
 static void vw_pq_aol_request(uint8_t mask) {
@@ -73,26 +66,16 @@ static uint8_t vw_pq_aol_permission(void) {
 
 static void vw_pq_aol_rx(const CANPacket_t *msg, uint8_t bus) {
   if (vw_pq_aol_enabled) {
-    if (msg_matches(msg, MSG_LENKHILFE_2, bus)) {
-      // Signal: Lenkhilfe_2.LH2_Sta_HCA (0 disabled, 1 init, 2 fault, 3 ready, 4 rejected, 5/7 active)
-      const unsigned int eps = msg->data[2] & 15U;
-      vw_pq_aol_seen |= 4U;
-      vw_pq_aol_eps_ts = microsecond_timer_get();
-      if ((eps != 1U) && (eps != 3U) && (eps != 4U) && (eps != 5U) && (eps != 7U)) {
-        vw_pq_aol_clear();
-      }
-    } else if (msg_matches(msg, MSG_MOTOR_2, bus)) {
+    if (msg_matches(msg, MSG_MOTOR_2, bus)) {
       // Signal: Motor_2.MO2_Sta_GRA
       const int acc_status = (msg->data[2] & 0xC0U) >> 6;
-      const bool engaged = (acc_status == 1) || (acc_status == 2);
-      if (engaged && !vw_pq_aol_cruise_engaged && vw_pq_aol_main && controls_allowed) {
-        vw_pq_aol_token = true;  // a fresh stock engagement arms lateral
+      if (((acc_status == 1) || (acc_status == 2)) && vw_pq_aol_main && controls_allowed) {
+        vw_pq_aol_token = true;  // a stock engagement arms lateral
       }
-      vw_pq_aol_cruise_engaged = engaged;
     } else if (msg_matches(msg, MSG_MOTOR_5, bus)) {
       // Signal: Motor_5.MO5_GRA_Hauptsch
       vw_pq_aol_main = GET_BIT(msg, 50U);
-      vw_pq_aol_seen |= 1U;
+      vw_pq_aol_main_seen = true;
       vw_pq_aol_main_ts = microsecond_timer_get();
       if (!vw_pq_aol_main) {
         vw_pq_aol_clear();

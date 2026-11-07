@@ -246,10 +246,6 @@ static void volkswagen_pq_rx_hook(const CANPacket_t *msg) {
 }
 
 // StarPinguPilot: AOL sources outside the rx checks (Lenkhilfe_2 EPS status, Gate_Komf_1 reverse light)
-static void volkswagen_pq_optional_rx(const CANPacket_t *msg) {
-  vw_pq_aol_rx(msg, volkswagen_pq_bus);
-}
-
 static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
   // lateral limits
   const TorqueSteeringLimits VOLKSWAGEN_PQ_STEERING_LIMITS = {
@@ -333,5 +329,4 @@ const safety_hooks volkswagen_pq_hooks = {
   .get_counter = volkswagen_pq_get_counter,
   .get_checksum = volkswagen_pq_get_checksum,
   .compute_checksum = volkswagen_pq_compute_checksum,
-  .optional_rx = volkswagen_pq_optional_rx,  // StarPinguPilot
 };

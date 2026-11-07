@@ -66,6 +66,8 @@ class VolkswagenStockCardIntent(AolCardIntent):
     self.main_seen = False
     self.pq = pq_qualified(cp)  # StarPinguPilot
     self.main_startup_pending = not self.pq  # PQ needs main seen off first
+    self.pq_main_off_seen = False
+    self.pq_armed = False
     self.main_available = False
     self.main_neutral = False
     self.main_pulse = False
@@ -74,6 +76,10 @@ class VolkswagenStockCardIntent(AolCardIntent):
   def update(self, CS, **kwargs):
     from openpilot.starpilot.aol.runtime import SAFETY_MAX_AGE_NS
     now_ns = kwargs.get('now_ns', 0)
+    if self.pq:
+      # StarPinguPilot: StarPilot 6 conditions, see _update_pq_latch. A fault or refusal pauses steering, never the arm.
+      kwargs['fault_active'] = False
+      kwargs['native_rejection_ns'] = 0
     if temporary_eps_restriction(self.cp, CS):
       self.physical_eps_pause = True
       self.eps_recovery_ns = 0
@@ -130,6 +136,21 @@ class VolkswagenStockCardIntent(AolCardIntent):
       if state.canValid and not state.canTimeout:
         self.main_startup_pending = False
       self.allowed_latch = False
+    if self.pq:
+      self._update_pq_latch(state)
+
+  def _update_pq_latch(self, state):
+    """StarPinguPilot: lateral with the main switch on. PQ stalks latch, so a switch already on at startup needs an
+    observed off first, or a stock engagement. Everything else only withdraws steering until it clears."""
+    can_ok = state.canValid and not state.canTimeout
+    if can_ok:
+      if not state.cruiseState.available:
+        self.pq_main_off_seen = True
+        self.pq_armed = False
+      elif self.pq_main_off_seen or state.cruiseState.enabled:
+        self.pq_armed = True
+    self.allowed_latch = bool(self.pq_armed and can_ok and self.settings.enabled and
+                              not state.steerFaultPermanent and not state.accFaulted)
 
 
 def create_intent(cp, settings):

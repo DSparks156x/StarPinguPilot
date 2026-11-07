@@ -140,17 +140,26 @@ class TestVolkswagenPqAol(unittest.TestCase):
     self.feed()
     assert self.safety.aol_get_permission_mask() == 1
 
-  def test_eps_fault_disarms(self):
+  def test_eps_fault_is_the_hosts_to_pause(self):
+    # StarPilot 6 conditions, and the host and panda arms cannot disagree after the rack recovers
     for eps in (0, 2):
       self.configure()
       self.arm()
       self.feed(eps=eps)
-      assert self.safety.aol_get_permission_mask() == 0
+      assert self.safety.aol_get_permission_mask() == 1
+
+  def test_engaged_cruise_arms_after_rx_recovers(self):
+    self.configure()
+    for _ in range(12):
       self.feed()
-      assert self.safety.aol_get_permission_mask() == 0
+    self.feed(engaged=True)
+    self.feed(engaged=True)
+    assert self.safety.aol_get_permission_mask() == 1
+    self.feed(main=False, engaged=True)
+    assert self.safety.aol_get_permission_mask() == 0
 
   def test_each_source_missing_or_wrong_bus_expires(self):
-    for name in ("Lenkhilfe_2", "Motor_5"):
+    for name in ("Motor_5",):
       for kwargs in ({"omit": name}, {"wrong_bus": name}):
         self.configure()
         self.arm()

@@ -89,6 +89,47 @@ def test_cancel_keeps_latch_main_off_clears_it():
   assert not owner.allowed_latch
 
 
+def test_arm_survives_faults_and_refusals():
+  # 2026-11-06: a no-entry (parking brake) failed the axis watchdog 0.21 s after every stalk flick
+  owner = aol.create_intent(tt_cp(), AolSettings(True, 5., 0, 0, (0, 0, 0), (0, 0, 0)))
+  _tick(owner, False, 0)
+  _tick(owner, True, 1)
+  assert owner.allowed_latch
+  state = structs.CarState(canValid=True, vEgo=20., gearShifter=structs.CarState.GearShifter.drive)
+  state.cruiseState.available = True
+  owner.update(state, now_ns=1_100_000_000, fault_active=True, native_rejection_ns=1_100_000_000)
+  assert owner.allowed_latch
+  _tick(owner, True, 12)
+  assert owner.allowed_latch
+
+
+def test_permanent_fault_withdraws_then_recovers():
+  owner = aol.create_intent(tt_cp(), AolSettings(True, 5., 0, 0, (0, 0, 0), (0, 0, 0)))
+  _tick(owner, False, 0)
+  _tick(owner, True, 1)
+  state = structs.CarState(canValid=True, vEgo=20., steerFaultPermanent=True, gearShifter=structs.CarState.GearShifter.drive)
+  state.cruiseState.available = True
+  owner.update(state, now_ns=1_100_000_000)
+  assert not owner.allowed_latch
+  _tick(owner, True, 12)
+  assert owner.allowed_latch
+
+
+def test_stock_engagement_arms_a_switch_on_at_startup():
+  owner = aol.create_intent(tt_cp(), AolSettings(True, 5., 0, 0, (0, 0, 0), (0, 0, 0)))
+  _tick(owner, True, 0)
+  assert not owner.allowed_latch
+  state = structs.CarState(canValid=True, vEgo=20., gearShifter=structs.CarState.GearShifter.drive)
+  state.cruiseState.available = True
+  state.cruiseState.enabled = True
+  owner.update(state, now_ns=1_100_000_000)
+  assert owner.allowed_latch
+  _tick(owner, True, 12)  # cruise cancelled, main still on
+  assert owner.allowed_latch
+  _tick(owner, False, 13)
+  assert not owner.allowed_latch
+
+
 def test_tt_keeps_lateral_at_standstill():
   from openpilot.starpilot.aol.runtime import ordinary_lateral_requested
   CP = tt_cp()
