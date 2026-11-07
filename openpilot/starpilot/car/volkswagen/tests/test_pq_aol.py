@@ -89,6 +89,15 @@ def test_cancel_keeps_latch_main_off_clears_it():
   assert not owner.allowed_latch
 
 
+def test_tt_keeps_lateral_at_standstill():
+  from openpilot.starpilot.aol.runtime import ordinary_lateral_requested
+  CP = tt_cp()
+  assert CP.steerAtStandstill and CP.minSteerSpeed == 0
+  state = structs.CarState(canValid=True, vEgo=0., standstill=True, gearShifter=structs.CarState.GearShifter.drive)
+  assert ordinary_lateral_requested(True, state, CP)
+  assert not aol.temporary_restriction(CP, state)  # a stop is not a pause for the native owner either
+
+
 def test_native_matches_cp_tt():
   CP = tt_cp()
   assert native_matches_cp(CP, PQ_MODEL, CP.safetyConfigs[-1].safetyParam)

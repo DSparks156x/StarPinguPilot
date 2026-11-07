@@ -43,6 +43,9 @@ class CarInterface(CarInterfaceBase):
       if ret.flags & VolkswagenFlags.NO_EXT_CAN:
         safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_NO_EXT_CAN.value
 
+      if candidate == CAR.AUDI_TT_MK2:
+        ret.steerAtStandstill = True  # StarPinguPilot: EPS patched to steer down to zero, see minSteerSpeed
+
     elif ret.flags & VolkswagenFlags.MLB:
       # Set global MLB parameters
       safety_configs = [get_safety_config(structs.CarParams.SafetyModel.volkswagenMlb)]
