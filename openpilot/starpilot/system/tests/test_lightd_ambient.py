@@ -122,6 +122,34 @@ def test_startup_ae_transient_is_ignored():
   assert outs[-1].dark_request
 
 
+def test_parked_facing_hedge_stays_off():
+  # route 00000018: parked 30 min facing shaded trees at sun +9..+13, reading 11.0-11.6
+  outs = run(AmbientEstimator(), lambda t: 11.0, 300.0, elev=9.0, v=0.0)
+  assert not any(o.dark_request for o in outs)
+
+
+def test_parked_in_garage_turns_on():
+  outs = run(AmbientEstimator(), lambda t: 6.0, 30.0, elev=30.0, v=0.0)
+  assert outs[-1].dark_request
+
+
+def test_stop_at_dusk_keeps_lights_on():
+  est = AmbientEstimator()
+  run(est, lambda t: est.p.on_threshold - 0.5, 120.0, elev=12.0)
+  outs = run(est, lambda t: est.p.on_threshold - 0.5, 120.0, elev=12.0, v=0.0, t0=120.0)
+  assert all(o.dark_request for o in outs)
+
+
+def test_dusk_switch_on_waits_for_scene_mix_after_stop():
+  est = AmbientEstimator()
+  run(est, lambda t: est.p.on_threshold + 0.5, 120.0, elev=12.0, v=0.0)
+  dark = est.p.on_threshold - 0.5
+  assert not run(est, lambda t: dark, 60.0, elev=12.0, v=0.0, t0=120.0)[-1].dark_request
+  outs = run(est, lambda t: dark, 30.0, elev=12.0, v=10.0, t0=180.0)
+  t_on = first(outs, lambda o: o.dark_request)
+  assert t_on is not None and 14.0 < t_on < 16.0  # scene_mix_m 150 m at 10 m/s
+
+
 def test_stale_camera_invalidates():
   est = AmbientEstimator()
   daylight(est, 5.0)

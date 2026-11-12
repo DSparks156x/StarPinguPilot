@@ -1204,3 +1204,22 @@ the observation angle, so a lit sign stays dim in the short frame at any range; 
 Without a short exposure (param off, replay, a missed frame) everything is as before; the tests cover both. The thresholds are
 physics estimates, not measurements: every light's short peak is now logged (`starpilotLightState.light*`, once per HBA frame),
 and `tools/short_peaks.py` prints its percentiles by kind and beam state. The first night drive with the param on sets them.
+
+## 18. Parked facing a hedge: the stopped-scene margin (2026-11-12, routes `00000017`/`00000018`)
+
+The car sat 38 min with the ignition on (07:34-08:12, sun +8..+13) facing a wall of shaded trees with no sky in view. lightd
+read 11.0-11.6 and requested low beams the whole time; on the open road the same morning read 14-16. The camera measures the
+light reflected off what it faces, so a close dark surface biases it by 3-4 stops. Driving averages over many surfaces, which
+is what `on_threshold` was fit on (§14); a stopped car sees one.
+
+Replay over the 100 dumped routes found the same false-on parked in daylight in 3a (sun 37), 3c (28), 3f (11), 43 (15) and
+44 (7), each lasting to the end of the route. Fix: until the car has driven `scene_mix_m` (150 m) since its last stop
+(v < 1 m/s), switching on needs `parked_margin` (2.0) more stops of darkness. The off threshold is unchanged, so lights
+already on stay on at a stop. Sweep (`replay_all.py parked_margin=0/1/1.5/2`): 1.0 left 3c and 44, 1.5 left 44, 2.0 cleared
+all of them; daytime moving false-on went 84 -> 48 s (3b), toggles 10 -> 5, and dusk first switch-on moved by 0.1-0.8 deg of sun
+(31, 41, 8c, 47). A garage (~6) still switches on while parked.
+
+Not changed: the first ~6 s after start (lowBeamValid false while AE settles) still fall back to G397, which is boxed in and
+reads dark, so the lights flash on at every start (seen again at the start of `00000019`). That needs the J519 grace window.
+The twilight boost also applies in the morning, though its reason (it only gets darker) holds only in the evening. Today's
+case is fixed without touching it, so it stays until a morning drive shows it matters.

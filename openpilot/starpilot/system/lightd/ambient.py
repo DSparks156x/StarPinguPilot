@@ -45,6 +45,13 @@ class AmbientParams:
   twilight_boost_hi: float = 10.0   # sun elevation where the boost starts...
   twilight_boost_lo: float = 6.0    # ...and where it is full (clear evenings then cross at ~+5 deg)
   hysteresis: float = 0.8     # stops above the threshold before releasing
+  # A stopped camera sees one surface, and its reflectance biases the reading (a shaded hedge filling the frame reads
+  # ~3-4 stops under the open road at the same light). Driving averages over many surfaces; the threshold was fit there.
+  # So switching on needs this much more darkness until the car has driven scene_mix_m since its last stop.
+  # 2.0 clears every parked daytime false-on in the replay set (sun +7..+37) and moves dusk switch-on by <1 deg (DESIGN.md §18)
+  parked_margin: float = 2.0
+  parked_v: float = 1.0       # m/s, below this counts as a stop
+  scene_mix_m: float = 150.0
   sensitivity: float = 0.0    # user offset in stops, + turns lights on earlier
   tau_slow: float = 20.0
   tau_fast_dark: float = 0.3
@@ -115,6 +122,7 @@ class AmbientEstimator:
   _below_m: float = 0.0
   _above_s: float = 0.0
   _tunnel: float | None = None
+  _since_stop_m: float = 0.0
 
   def _sample_ok(self, s: CameraSample | None, t: float) -> bool:
     return s is not None and t - s.t < self.p.stale_s and 0.0 < s.grey < 1.0 and 0.0 <= s.ev_percent <= 100.0
@@ -161,8 +169,12 @@ class AmbientEstimator:
       self._tunnel = cue if self._tunnel is None else ema(self._tunnel, cue, dt, 0.5)
       out.tunnel_cue = self._tunnel
 
+    self._since_stop_m = 0.0 if v_ego < p.parked_v else self._since_stop_m + dt * v_ego
+
     on = p.on_threshold + p.sensitivity + twilight_boost(p, solar_elev)
     off = on + p.hysteresis
+    if self._since_stop_m < p.scene_mix_m:
+      on -= p.parked_margin
     out.on_threshold = on
 
     # slow channel: dusk, dawn, storms
