@@ -14,10 +14,12 @@ import time
 # Two supported 1ms clocks already contribute 2ms before sampling overhead.
 MAX_CLOCK_RESOLUTION_NS = 1_000_000
 MAX_CLOCK_UNCERTAINTY_NS = 3_000_000
+# StarPinguPilot: the three camerad files are pinned at the staggered-capture version (lightd/CAMERA_HDR.md): an extra
+# short exposure stream that copies meta.timestamp_sof/eof. The long frame and how its timestamps are made are unchanged.
 PRODUCER_SOURCE_HASHES = (
-  ('openpilot', 'system/camerad/cameras/spectra.cc', '4fa26c17f0fb792a4ab6815657beccddee1d641faa2fd02e5aa7393f717a2f3a'),
-  ('openpilot', 'system/camerad/cameras/camera_qcom2.cc', 'b34c24c9984a0ac086f7b961cb7ff09d0501231da50aaad0e676bb3dc3f2edd9'),
-  ('openpilot', 'system/camerad/cameras/camera_common.cc', 'bd9a416a6ee21047b4deec6df04276d8717cd92fe14de43f3e9daff86b62bb8f'),
+  ('openpilot', 'system/camerad/cameras/spectra.cc', '71ffc37f157f6ac6e70550661cc4aa571d96330b0696e8dc3b1644b1f4ba93b1'),
+  ('openpilot', 'system/camerad/cameras/camera_qcom2.cc', 'e94c3087f893389b3b777a83f9d79072d85a5cd7d2be90d6e99367f368e1fdeb'),
+  ('openpilot', 'system/camerad/cameras/camera_common.cc', '099cab4acede64242b30e66f042659df9220ff032f74791ceaf0f241e691bc9a'),
   ('openpilot', 'selfdrive/modeld/modeld.py', '8aa09862919bd3900489b2444f03179661b62e45f683270abf8c50d1ae3173fa'),
   ('openpilot', 'selfdrive/modeld/fill_model_msg.py', 'b3916c34d1073d0c26a7a8adc51e7b148f63a1ac68b388226170fd0f8b8b56b4'),
   ('openpilot', 'system/sensord/sensord.py', '7c79ab07d775622a43001e5a9b9ccc9a7bafb065940185849b33eefc2fd26420'),
