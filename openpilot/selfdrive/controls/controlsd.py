@@ -614,8 +614,13 @@ class Controls:
     if automatic is not None:
       try:
         learning_feedback = feedback.as_reader().as_builder()
+        # StarPinguPilot: steer_limited_by_safety compares this frame's request with the output of an earlier one (two on
+        # 50 Hz HCA), so a moving request reads as limited (37% of a TT drive, 5% when matched). For torque, card's applied
+        # evidence already checks each emitted command against the request that made it (inspect_projection), and FLM
+        # takes no torque sample without it. The integrator and controller replay keep the upstream flag.
+        flm_limited = False if self.CP.steerControlType == car.CarParams.SteerControlType.torque else self.steer_limited_by_safety
         written = control_message(learning_feedback, self.LaC, CC, control_ns=cc_send.logMonoTime,
-                                  state_ns=self.sm.logMonoTime['carState'], limited=self.steer_limited_by_safety)
+                                  state_ns=self.sm.logMonoTime['carState'], limited=flm_limited)
         if written is False:
           raise ValueError('optional control evidence write failed')
         if automatic.outcome is not None:
