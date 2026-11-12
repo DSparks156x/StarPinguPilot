@@ -667,7 +667,7 @@ struct StarPilotCarState::LightState {
   class Pipeline;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(be96311f76899cf7, 9, 0)
+    CAPNP_DECLARE_STRUCT_HEADER(be96311f76899cf7, 9, 9)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -3788,6 +3788,35 @@ public:
 
   inline float getHbaProcessingMs() const;
 
+  inline bool getShortExposureValid() const;
+
+  inline bool hasLightTrackId() const;
+  inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Reader getLightTrackId() const;
+
+  inline bool hasLightU() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getLightU() const;
+
+  inline bool hasLightV() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getLightV() const;
+
+  inline bool hasLightArea() const;
+  inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Reader getLightArea() const;
+
+  inline bool hasLightRed() const;
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader getLightRed() const;
+
+  inline bool hasLightShortPeak() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getLightShortPeak() const;
+
+  inline bool hasLightEvidence() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getLightEvidence() const;
+
+  inline bool hasLightKind() const;
+  inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Reader getLightKind() const;
+
+  inline bool hasLightLamp() const;
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader getLightLamp() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -3905,6 +3934,81 @@ public:
 
   inline float getHbaProcessingMs();
   inline void setHbaProcessingMs(float value);
+
+  inline bool getShortExposureValid();
+  inline void setShortExposureValid(bool value);
+
+  inline bool hasLightTrackId();
+  inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Builder getLightTrackId();
+  inline void setLightTrackId( ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightTrackId(::kj::ArrayPtr<const  ::uint32_t> value);
+  inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Builder initLightTrackId(unsigned int size);
+  inline void adoptLightTrackId(::capnp::Orphan< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>> disownLightTrackId();
+
+  inline bool hasLightU();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getLightU();
+  inline void setLightU( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightU(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initLightU(unsigned int size);
+  inline void adoptLightU(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownLightU();
+
+  inline bool hasLightV();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getLightV();
+  inline void setLightV( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightV(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initLightV(unsigned int size);
+  inline void adoptLightV(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownLightV();
+
+  inline bool hasLightArea();
+  inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Builder getLightArea();
+  inline void setLightArea( ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightArea(::kj::ArrayPtr<const  ::uint16_t> value);
+  inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Builder initLightArea(unsigned int size);
+  inline void adoptLightArea(::capnp::Orphan< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>> disownLightArea();
+
+  inline bool hasLightRed();
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder getLightRed();
+  inline void setLightRed( ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightRed(::kj::ArrayPtr<const bool> value);
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder initLightRed(unsigned int size);
+  inline void adoptLightRed(::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>> disownLightRed();
+
+  inline bool hasLightShortPeak();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getLightShortPeak();
+  inline void setLightShortPeak( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightShortPeak(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initLightShortPeak(unsigned int size);
+  inline void adoptLightShortPeak(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownLightShortPeak();
+
+  inline bool hasLightEvidence();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getLightEvidence();
+  inline void setLightEvidence( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightEvidence(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initLightEvidence(unsigned int size);
+  inline void adoptLightEvidence(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownLightEvidence();
+
+  inline bool hasLightKind();
+  inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Builder getLightKind();
+  inline void setLightKind( ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Reader value);
+  inline void setLightKind(::kj::ArrayPtr<const  ::capnp::Text::Reader> value);
+  inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Builder initLightKind(unsigned int size);
+  inline void adoptLightKind(::capnp::Orphan< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>&& value);
+  inline ::capnp::Orphan< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>> disownLightKind();
+
+  inline bool hasLightLamp();
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder getLightLamp();
+  inline void setLightLamp( ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setLightLamp(::kj::ArrayPtr<const bool> value);
+  inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder initLightLamp(unsigned int size);
+  inline void adoptLightLamp(::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>> disownLightLamp();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -18411,6 +18515,362 @@ inline float StarPilotCarState::LightState::Builder::getHbaProcessingMs() {
 inline void StarPilotCarState::LightState::Builder::setHbaProcessingMs(float value) {
   _builder.setDataField<float>(
       ::capnp::bounded<16>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool StarPilotCarState::LightState::Reader::getShortExposureValid() const {
+  return _reader.getDataField<bool>(
+      ::capnp::bounded<329>() * ::capnp::ELEMENTS);
+}
+
+inline bool StarPilotCarState::LightState::Builder::getShortExposureValid() {
+  return _builder.getDataField<bool>(
+      ::capnp::bounded<329>() * ::capnp::ELEMENTS);
+}
+inline void StarPilotCarState::LightState::Builder::setShortExposureValid(bool value) {
+  _builder.setDataField<bool>(
+      ::capnp::bounded<329>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightTrackId() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightTrackId() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightTrackId() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightTrackId() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightTrackId( ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightTrackId(::kj::ArrayPtr<const  ::uint32_t> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightTrackId(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightTrackId(
+    ::capnp::Orphan< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightTrackId() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint32_t,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<0>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightU() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightU() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightU() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightU() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightU( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightU(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightU(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightU(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightU() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<1>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightV() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightV() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightV() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightV() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightV( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightV(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightV(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightV(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightV() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<2>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightArea() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightArea() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightArea() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightArea() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightArea( ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightArea(::kj::ArrayPtr<const  ::uint16_t> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightArea(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightArea(
+    ::capnp::Orphan< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightArea() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::uint16_t,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<3>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightRed() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightRed() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightRed() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightRed() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightRed( ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightRed(::kj::ArrayPtr<const bool> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightRed(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightRed(
+    ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightRed() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<4>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightShortPeak() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightShortPeak() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightShortPeak() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightShortPeak() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightShortPeak( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightShortPeak(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightShortPeak(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightShortPeak(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightShortPeak() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<5>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightEvidence() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightEvidence() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightEvidence() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightEvidence() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightEvidence( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightEvidence(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightEvidence(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightEvidence(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightEvidence() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<6>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightKind() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightKind() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Reader StarPilotCarState::LightState::Reader::getLightKind() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::get(_reader.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Builder StarPilotCarState::LightState::Builder::getLightKind() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::get(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightKind( ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::set(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightKind(::kj::ArrayPtr<const  ::capnp::Text::Reader> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::set(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>::Builder StarPilotCarState::LightState::Builder::initLightKind(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::init(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightKind(
+    ::capnp::Orphan< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>> StarPilotCarState::LightState::Builder::disownLightKind() {
+  return ::capnp::_::PointerHelpers< ::capnp::List< ::capnp::Text,  ::capnp::Kind::BLOB>>::disown(_builder.getPointerField(
+      ::capnp::bounded<7>() * ::capnp::POINTERS));
+}
+
+inline bool StarPilotCarState::LightState::Reader::hasLightLamp() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS).isNull();
+}
+inline bool StarPilotCarState::LightState::Builder::hasLightLamp() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader StarPilotCarState::LightState::Reader::getLightLamp() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::getLightLamp() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
+}
+inline void StarPilotCarState::LightState::Builder::setLightLamp( ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), value);
+}
+inline void StarPilotCarState::LightState::Builder::setLightLamp(::kj::ArrayPtr<const bool> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>::Builder StarPilotCarState::LightState::Builder::initLightLamp(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), size);
+}
+inline void StarPilotCarState::LightState::Builder::adoptLightLamp(
+    ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>> StarPilotCarState::LightState::Builder::disownLightLamp() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<bool,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<8>() * ::capnp::POINTERS));
 }
 
 inline  ::uint16_t StarPilotCarState::ToyotaCruise::Reader::getVersion() const {
