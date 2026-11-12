@@ -168,7 +168,9 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = pt_cp.vl["Lenkhilfe_3"]["LH3_BLW"] * (1, -1)[int(pt_cp.vl["Lenkhilfe_3"]["LH3_BLWSign"])]
     ret.steeringRateDeg = pt_cp.vl["Lenkwinkel_1"]["LW1_Lenk_Gesch"] * (1, -1)[int(pt_cp.vl["Lenkwinkel_1"]["LW1_Gesch_Sign"])]
     ret.steeringTorque = pt_cp.vl["Lenkhilfe_3"]["LH3_LM"] * (1, -1)[int(pt_cp.vl["Lenkhilfe_3"]["LH3_LMSign"])]
-    ret.steeringPressed = abs(ret.steeringTorque) > self.CCP.STEER_DRIVER_ALLOWANCE
+    # StarPinguPilot: 1.0 Nm held for 5 frames, like MQB. At 0.8 Nm unfiltered, resting hands flickered it ~15 times a minute
+    # (2026-11-12 TT drive: |torque| p95 0.78 Nm, 2/3 of presses 5 frames or shorter). The torque limiter keeps 0.8 Nm.
+    ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > 100, 5)
     hca_status = self.CCP.hca_status_values.get(pt_cp.vl["Lenkhilfe_2"]["LH2_Sta_HCA"])
     ret.steerFaultTemporary, ret.steerFaultPermanent = self.update_hca_state(hca_status)
 
