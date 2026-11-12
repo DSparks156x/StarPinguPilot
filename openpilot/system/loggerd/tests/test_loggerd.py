@@ -109,7 +109,7 @@ class TestLoggerd(OpenpilotTestCase):
 
     return sent_msgs
 
-  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5):
+  def _publish_camera_and_audio_messages(self, num_segs=1, segment_length=5, extra_streams=()):
     # Use small frame sizes for testing (width, height, size, stride, uv_offset)
     # NV12 format: size = stride * height * 1.5, uv_offset = stride * height
     w, h = 320, 240
@@ -125,6 +125,9 @@ class TestLoggerd(OpenpilotTestCase):
     vipc_server = VisionIpcServer("camerad")
     for stream_type, frame_spec, _ in streams:
       vipc_server.create_buffers_with_sizes(stream_type, 40, *(frame_spec))
+    for stream_type in extra_streams:
+      # RAW10 streams have no UV plane and must never be handed to a video encoder.
+      vipc_server.create_buffers_with_sizes(stream_type, 4, w, h, w * h * 5 // 4, w * 5 // 4, 0)
     vipc_server.start_listener()
 
     os.environ["LOGGERD_TEST"] = "1"
@@ -198,7 +201,8 @@ class TestLoggerd(OpenpilotTestCase):
       assert getattr(initData, initData_key) == v
       assert logged_params[param_key].decode() == v
 
-  def test_rotation(self):
+  @parameterized.expand([False, True])
+  def test_rotation(self, extra_streams):
     Params().put("RecordFront", True, block=True)
 
     expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc", ".cloud-provider"}
@@ -206,7 +210,9 @@ class TestLoggerd(OpenpilotTestCase):
     num_segs = random.randint(2, 3)
     length = random.randint(4, 5) # H264 encoder uses 40 lookahead frames and does B-frame reordering, so minimum 3 seconds before qcam output
 
-    self._publish_camera_and_audio_messages(num_segs=num_segs, segment_length=length)
+    unconfigured = (VisionStreamType.VISION_STREAM_NARROW_SHORT, VisionStreamType.VISION_STREAM_WIDE_SHORT,
+                    VisionStreamType.VISION_STREAM_MAP, 99) if extra_streams else ()
+    self._publish_camera_and_audio_messages(num_segs=num_segs, segment_length=length, extra_streams=unconfigured)
 
     route_path = str(self._get_latest_log_dir()).rsplit("--", 1)[0]
     for n in range(num_segs):
@@ -215,6 +221,8 @@ class TestLoggerd(OpenpilotTestCase):
       logged = {f.name for f in p.iterdir() if f.is_file()}
       diff = logged ^ expected_files
       assert len(diff) == 0, f"didn't get all expected files. seg={n} {route_path=}, {diff=}\n{logged=} {expected_files=}"
+      for video in ("fcamera.hevc", "dcamera.hevc", "ecamera.hevc", "qcamera.ts"):
+        assert (p / video).stat().st_size > 0, f"segment {n}: {video} has no encoded frames"
 
   def test_bootlog(self):
     # generate bootlog with fake launch log

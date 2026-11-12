@@ -177,7 +177,8 @@ void encoderd_thread(const LogCameraInfo (&cameras)[N]) {
     for (auto stream : streams) {
       auto it = std::find_if(std::begin(cameras), std::end(cameras),
                              [stream](auto &cam) { return cam.stream_type == stream; });
-      assert(it != std::end(cameras));
+      // camerad also advertises raw short exposures and other streams we don't encode.
+      if (it == std::end(cameras)) continue;
       ++s.max_waiting;
       encoder_threads.push_back(std::thread(encoder_thread, &s, *it));
     }
