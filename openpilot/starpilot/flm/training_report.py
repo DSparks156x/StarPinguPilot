@@ -6,6 +6,7 @@ import math
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 from collections import Counter, deque
 
@@ -14,6 +15,10 @@ from openpilot.starpilot.flm.live_tracking_report import tracking_objects
 
 READ_MAX_BYTES = 32_768
 READ_MAX_AGE_NS = 2_000_000_000
+# StarPinguPilot: on-disk copy of the report, one file per drive
+PERSIST_DIR = '/data/media/0/flm_reports'
+PERSIST_INTERVAL_NS = 60_000_000_000
+PERSIST_KEEP = 30
 
 
 def _report_pairs(pairs):
@@ -137,6 +142,36 @@ class TrainingReporter:
     self.fit_attempts = self.fit_results = 0
     self.last_fit = None
     self.last_fit_rejection = None
+
+  def _persist(self, now_ns, encoded, current):
+    """StarPinguPilot: the RAM report dies with the device, so keep the latest one per drive on disk (once a minute)
+    and log a summary line. Read-only telemetry, same payload as the RAM report."""
+    if now_ns - getattr(self, '_last_persist', 0) < PERSIST_INTERVAL_NS:
+      return
+    self._last_persist = now_ns
+    try:
+      directory = Path(PERSIST_DIR)
+      if not directory.parent.is_dir():
+        return
+      directory.mkdir(exist_ok=True)
+      if not getattr(self, '_persist_name', None):
+        self._persist_name = time.strftime('%Y-%m-%d--%H-%M-%S') + '.json'
+        for old in sorted(directory.glob('*.json'))[:-(PERSIST_KEEP - 1)]:
+          old.unlink(missing_ok=True)
+      fd, temporary = tempfile.mkstemp(prefix='.flm-', dir=directory)
+      with os.fdopen(fd, 'wb') as stream:
+        stream.write(encoded)
+      os.replace(temporary, directory / self._persist_name)
+      tracking = current.get('tracking') if type(current.get('tracking')) is dict else {}
+      details = current.get('details', {})
+      from openpilot.common.swaglog import cloudlog
+      cloudlog.event('flm_report', status=current.get('status'), reason=current.get('reason'),
+                     tracking_status=tracking.get('status'), tracking_reason=tracking.get('reason'),
+                     trial=tracking.get('trialId'), phase=tracking.get('phase'), names=tracking.get('names'),
+                     before=tracking.get('beforeEpisodes'), future=tracking.get('futureEpisodes'),
+                     interruptions=details.get('Capture interruptions'), refusals=details.get('GLOBAL source observation refusals'))
+    except Exception:
+      pass
 
   def reset(self, reason):
     self.control = None
@@ -365,6 +400,7 @@ class TrainingReporter:
       with os.fdopen(fd, 'wb') as stream:
         stream.write(encoded)
       os.replace(temporary, self.path)
+      self._persist(now_ns, encoded, current)
     except (OSError, ValueError, TypeError, OverflowError):
       # Diagnostics cannot stop collection or supply controller authority.
       pass
