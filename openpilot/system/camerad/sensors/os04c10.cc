@@ -1,4 +1,6 @@
+#include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "system/camerad/sensors/sensor.h"
@@ -145,11 +147,30 @@ void OS04C10::stagger_configure() {
     }
   }
 
+  if (const char *regs = getenv("CAMERA_STAGGER_REGS")) {  // bring-up: "0x3621=0xb0,0x3022=0x61" overrides table values
+    for (const char *p = regs; *p;) {
+      char *end;
+      uint32_t addr = std::strtoul(p, &end, 0);
+      assert(*end == '=');
+      uint32_t val = std::strtoul(end + 1, &end, 0);
+      bool found = false;
+      for (auto &reg : init_reg_array) {
+        if (reg.reg_addr == addr) {
+          reg.reg_data = val;
+          found = true;
+        }
+      }
+      assert(found);
+      printf("staggered HDR: register 0x%04x = 0x%02x (CAMERA_STAGGER_REGS)\n", addr, val);
+      p = *end == ',' ? end + 1 : end;
+    }
+  }
+
   bits_per_pixel = 10;
   mipi_format = CAM_FORMAT_MIPI_RAW_10;
   frame_data_type = CSI_RAW10;
   frame_stride = frame_width * 10 / 8;
-  black_level = 12;  // 48 at 12 bits. TODO: measure with the lens covered
+  black_level = 64;  // measured: a 64-line short frame of a dim room reads 61-65 (comma's 2024 stagger code used 64 too)
   readout_time_ns = 10290000;  // rows are 19.8 instead of 21.2 us. TODO: measure
 }
 

@@ -333,7 +333,11 @@ const struct i2c_random_wr_payload init_array_os04c10[] = {
 
 // Staggered HDR: the linear table above with these values patched in place (write order kept). Two exposures per frame,
 // each on its own MIPI virtual channel, RAW10. From commaai/openpilot#36806 (draft, "works with vc, 20fps and staggered
-// hdr"), whose full table is ours plus exactly these 15 changes. The meanings are guesses until we have the datasheet.
+// hdr"), whose full table is ours plus the first 15 changes below. The meanings are guesses until we have the datasheet.
+// #36806's table alone runs the ADC in 10-bit mode (0x370a bit 1, as on the OS04A10) but leaves its output scaled as if it
+// were 12-bit: every channel clipped at raw 255 of 1023 before the sensor's white balance, the ramp ended at ~157 codes
+// above black, and lamps peaked at Y ~167 in openpilot's frames (drive 0000001d, 2026-11-13: the HBA saw no white light).
+// The last two groups, from comma's 2024 stagger table (cc3550df2a), fix that; measured on the bench (CAMERA_HDR.md §13).
 const struct i2c_random_wr_payload stagger_patch_os04c10[] = {
   {0x0301, 0x84}, {0x0305, 0x61}, {0x0325, 0x7a},  // PLL: half the sclk, so each row period carries a long and a short row
   {0x3022, 0x01},
@@ -343,4 +347,10 @@ const struct i2c_random_wr_payload stagger_patch_os04c10[] = {
   {0x380f, 0xdb},                  // VTS 2523 (0x380e stays 0x09): 50 ms at 19.8 us per row
   {0x3821, 0x04},                  // stagger HDR on
   {0x4090, 0x14},                  // BLC
+  {0x366a, 0x54},                  // 10-bit output of the 10-bit ADC: full 0..1023, black 64 (0x50: raw / 4, clipped at 255)
+  // ADC ramp timing for the half-speed clock: with the 12-bit values the ramp ended at ~70 % of the range (G clipped at 692)
+  {0x3706, 0x4a}, {0x370b, 0xa2},
+  {0x3741, 0x4a}, {0x3743, 0x4a}, {0x3745, 0x4a}, {0x3747, 0x4a},
+  {0x3749, 0xa2}, {0x374b, 0xa2}, {0x374d, 0xa2}, {0x374f, 0xa2},
+  {0x378d, 0x30}, {0x3790, 0x4a}, {0x3791, 0xa2},
 };

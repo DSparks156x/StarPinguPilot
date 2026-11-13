@@ -13,7 +13,7 @@ import numpy as np
 SHORT_EXPOSURE_LINES = 0x40  # 0x3510-0x3512 in camerad's OS04C10 init table, at gain 1x (0x350c/d = 0x0080)
 ROW_TIME_S = 50e-3 / 2523    # staggered HDR VTS: about 19.8 us per row
 SHORT_EXPOSURE_S = SHORT_EXPOSURE_LINES * ROW_TIME_S
-BLACK_LEVEL = 16             # RAW10 counts, measured: a dark room's short frames read 15-16 at every percentile
+BLACK_LEVEL = 64             # RAW10 counts, measured: a dim room's short frames read 61-65 (camerad sets 0x366a = 0x54)
 RAW_MAX = 1023
 RAW_SCALE = 2                # raw pixels per processed pixel, each way (os04c10 out_scale)
 MATCH_WAIT_MS = 5            # camerad sends the short frame right after the processed one

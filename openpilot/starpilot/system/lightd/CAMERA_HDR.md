@@ -1,7 +1,8 @@
 # Short-exposure frames for lightd (comma 4 / OS04C10 stagger HDR)
 
-Status: **implemented and brought up on the comma 4, parked indoors** (2026-11-04, section 11); **lightd's HBA reads it**
-(section 12), behind the param `CameraShortExposure`, off by default. Not driven yet. Sections 1-10 are the investigation from
+Status: **implemented**, behind the param `CameraShortExposure` (off by default). Driven once (2026-11-13) with a sensor
+setting that put out raw / 4; **fixed on the bench the same day (section 13)**, not driven since. lightd logs each light's
+short peak (section 12); the HBA's thresholds come from one drive and need measuring. Sections 1-10 are the investigation from
 2026-10-24 (tree `pingu` @ f9f5507015, before the StarPilot 7 port: paths there are relative to `openpilot/`). The verdict was
 medium-hard because the stagger mode makes openpilot's road frames RAW10. The user chose to build it anyway: telling
 headlights from signs needs a short exposure.
@@ -423,3 +424,34 @@ beam and core size, and writes a per-light CSV for hindsight labelling (`hba_too
 3. A night drive in mode 1 (shadow) with the param on, checking modeld, DM and camerad stay healthy (section 11, phase 5).
    Then `short_peaks.py` on it, and set the thresholds from the distributions before mode 3.
 4. The wide guard could use `VISION_STREAM_WIDE_SHORT` the same way (its ring test is the same lamps-bloom guess); not done.
+
+## 13. The stagger output was a quarter scale: fixed (2026-11-13)
+
+**Drive `0000001d--1219bc5480`** (2026-11-13, param on, mode 3, no oncoming cars): the short exposure was paired on ~100 %
+of HBA frames, but lightd logged **no white light all drive**. Lamps in openpilot's road frames peaked at Y ~167 (route 5a,
+linear: 235-255), so nothing reached the HBA's Y >= 225: it was blind to headlights, and the wide guard too. Every dip was
+the red path. Short peaks piled up at 343-348 above black and never passed 349.
+
+**Bench** (comma on the bench, a lamp in view, `CTRL_EXP_FROM_PARAMS` fixed exposures, VCs swapped to read the long raw on
+RDI, the bring-up hook `CAMERA_STAGGER_REGS=0xADDR=0xVAL,...`):
+- with the sensor's white balance (0x5100-0x5145) at 1x every channel clipped at raw ~173; with 2x digital gain at exactly
+  255. The default per-channel clips (G 173, B 271, R 364) were that times the WB gains. The 10-bit ADC (0x370a bit 1, as on
+  the OS04A10) was put out as if 12-bit: raw / 4. Black read 16 = 64 / 4;
+- **0x366a 0x50 -> 0x54** (comma's 2024 table): full 0..1023, black 64;
+- **ADC ramp timing** 0x3706/0x370b/0x3741-0x374f/0x378d/0x3790/0x3791 at the 2024 values (about half / double ours, for the
+  half-speed clock): without them G still clipped at 692;
+- 0x3662 low bits, 0x4090, 0x3610, 0x3685, 0x4507, 0x5001: no effect; 0x3022 = 0x61, 0x3662 = 0x00/0x18, 0x4305 = 0x93:
+  stagger stops (camerad falls back).
+
+Result, processed Y p50 / p99 / max at the same fixed exposures:
+
+| exposure | linear | stagger before | stagger fixed |
+|---|---|---|---|
+| 100 lines x1 | 32 / 67 / 236 | 29 / 37 / 173 | 30 / 64 / 235 |
+| 2000 x1 | 68 / 208 / 237 | 39 / 137 / 176 | 65 / 206 / 237 |
+| 2300 x8.5 | 176 / 237 / 237 | 102 / 180 / 189 | 173 / 237 / 237 |
+
+`black_level` is 64 (10 bits) and lightd's `BLACK_LEVEL` 64. Short-exposure counts are now true RAW10: the 0000001d numbers
+are ~5.8x too low (x4 for the shift, x1.45 for the ramp). Rescaled, red reflectors under our high beam peaked at ~280-350
+counts, far past section 12's 20-60 estimate. `short_lamp_peak` is now 640 (about twice that) and `short_sign_peak` 320, from
+this one drive, until a night drive at the corrected scale measures white signs and headlights.

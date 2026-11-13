@@ -273,9 +273,14 @@ class HbaParams:
   # don't get brighter than that. A lamp whose long-frame core is >= 30 px is >= 10x over the clip level at its peak
   # (its flare reaches 4-5 core radii at Y 70), >= 200 counts; far unresolved headlights fade with distance squared
   # (~100-300 counts at 150 m), far delineators with its fourth power (a few counts at 100 m).
-  short_lamp_peak: float = 192.0    # median short peak at or above this: a lamp (white lights only: taillights are as
+  # The first drive (0000001d, 2026-11-13) said otherwise: red reflectors under our high beam peaked at ~280-350 counts
+  # (rescaled: that drive's sensor setting read raw / 4 with a short ramp, CAMERA_HDR.md §13), so lit retroreflectors
+  # reach far past the estimate and 192 would call them lamps. Set from that one drive until a night drive at the
+  # corrected scale measures white signs, reflectors and headlights (tools/short_peaks.py): a lamp at about twice the
+  # brightest reflector (near headlights clip the short frame at 959), a sign at or under the brightest reflector.
+  short_lamp_peak: float = 640.0    # median short peak at or above this: a lamp (white lights only: taillights are as
                                     # dim as the red reflectors our beam lights)
-  short_sign_peak: float = 64.0     # a big burnt-out white blob whose short peak never exceeds this is a lit surface...
+  short_sign_peak: float = 320.0    # a big burnt-out white blob whose short peak never exceeds this is a lit surface...
   short_sign_min_area: int = 30     # ...when its long-frame core is at least this big (a resolved surface; a small far
                                     # dot this dim is as likely a far car)
   short_min_obs: int = 3            # of the last 5 frames, this many must have a short exposure to say either

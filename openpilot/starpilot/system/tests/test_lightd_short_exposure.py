@@ -75,6 +75,7 @@ def test_short_peak_is_the_brightest_raw_count_above_black_on_any_channel():
 
 
 GEOM = Geometry([0.0, 0.0, 0.0], HEIGHT)
+P = HbaParams()
 
 
 def short_with(lights, black=BLACK_LEVEL):
@@ -96,35 +97,35 @@ def lit_bg():
 def test_a_blooming_light_that_is_dim_in_the_short_exposure_is_a_sign():
   # without the short exposure this light dips: it blooms like a lamp (test_a_lit_sign_is_static_and_a_blooming_lamp_is_not)
   lamp = add_light(lit_bg(), GEOM, 150.0, -3.6, 0.7, radius=5)
-  clf = HbaClassifier()
+  clf = HbaClassifier(P)
   run(clf, [lit_bg()] * 120, high_beam_on=True)
   outs = run(clf, [lamp] * 40, t0=6.0, high_beam_on=True, short=short_with([(150.0, -3.6, 0.7, 30)]))
   assert all(o.high_beam_permitted for o in outs) and all(o.short_valid for o in outs)
   assert {tr.why for tr in clf.tracks if tr.missed == 0} == {"short"}
   # the same light bright in the short exposure is a lamp and dips
-  clf = HbaClassifier()
+  clf = HbaClassifier(P)
   run(clf, [lit_bg()] * 120, high_beam_on=True)
-  outs = run(clf, [lamp] * 40, t0=6.0, high_beam_on=True, short=short_with([(150.0, -3.6, 0.7, 600)]))
+  outs = run(clf, [lamp] * 40, t0=6.0, high_beam_on=True, short=short_with([(150.0, -3.6, 0.7, 900)]))
   assert not outs[-1].high_beam_permitted
   assert all(x.lamp for x in outs[-1].lights)
 
 
 def test_a_lamp_that_looks_compact_or_was_born_at_our_switch_on_is_still_a_lamp():
   # the compact-glow rule calls this a sign; the short exposure says it's a source
-  clf = HbaClassifier()
+  clf = HbaClassifier(P)
   run(clf, [lit_bg()] * 120, high_beam_on=True)
   outs = run(clf, [_lit_sign_frame(GEOM, 150.0, 0.0)] * 40, t0=6.0, high_beam_on=True,
-             short=short_with([(150.0, 0.0, 0.7, 500)]))
+             short=short_with([(150.0, 0.0, 0.7, 900)]))
   assert not outs[-1].high_beam_permitted
   assert "sign" not in {tr.why for tr in clf.tracks if tr.missed == 0}
   # a far car that shows up just as our high beam comes on: the switch-on rule would call it the sign we lit
-  clf = HbaClassifier()
+  clf = HbaClassifier(P)
   run(clf, [dark_frame()] * 50, high_beam_on=False)
   car = frame_with_light(GEOM, 150.0, -3.6, 0.7, radius=6)
-  outs = run(clf, [car] * 20, t0=2.5, high_beam_on=True, short=short_with([(150.0, -3.6, 0.7, 400)]))
+  outs = run(clf, [car] * 20, t0=2.5, high_beam_on=True, short=short_with([(150.0, -3.6, 0.7, 800)]))
   i = _first_dip(outs)
   # short_min_obs frames to measure it, then ev_lamp
-  p = HbaParams()
+  p = P
   assert i is not None and (i + 1) * DT <= p.short_min_obs * DT + 1.0 / p.ev_lamp + 2 * DT + 1e-9
 
 
@@ -133,7 +134,7 @@ def test_a_small_dim_dot_is_left_to_the_rules():
   dot = frame_with_light(GEOM, 160.0, -3.6, 0.7, radius=1)
   need = 1.0 / HbaParams().ev_lone
   for short in (None, short_with([(160.0, -3.6, 0.7, 5)])):
-    clf = HbaClassifier()
+    clf = HbaClassifier(P)
     run(clf, [dark_frame()] * 120)
     outs = run(clf, [dot] * round(1.2 * need / DT), t0=6.0, short=short)
     assert _first_dip(outs) is not None
@@ -141,9 +142,10 @@ def test_a_small_dim_dot_is_left_to_the_rules():
 
 
 def test_lights_are_listed_for_the_log():
-  clf = HbaClassifier()
+  clf = HbaClassifier(P)
   outs = run(clf, [frame_with_light(GEOM, 60.0, -3.6, 0.7, radius=4)] * 3, short=short_with([(60.0, -3.6, 0.7, 250)]))
   (light,) = outs[-1].lights
   assert light.short_peak == 250.0 and not light.red and light.area > 0 and "/" in light.kind
   outs = run(clf, [frame_with_light(GEOM, 60.0, -3.6, 0.7, radius=4)], t0=1.0)
   assert not outs[-1].short_valid and math.isnan(outs[-1].lights[0].short_peak)
+

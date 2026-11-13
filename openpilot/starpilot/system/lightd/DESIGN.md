@@ -1223,3 +1223,8 @@ Not changed: the first ~6 s after start (lowBeamValid false while AE settles) st
 reads dark, so the lights flash on at every start (seen again at the start of `00000019`). That needs the J519 grace window.
 The twilight boost also applies in the morning, though its reason (it only gets darker) holds only in the evening. Today's
 case is fixed without touching it, so it stays until a morning drive shows it matters.
+
+**2026-11-13:** the first drive with it (`0000001d`) ran a sensor setting that put out raw / 4, so openpilot's frames peaked at
+Y ~167 and the HBA saw no white light at all. Fixed in camerad (`CAMERA_HDR.md` §13). That drive's reflector peaks, rescaled,
+were ~5x the estimate above: `short_lamp_peak` 640 and `short_sign_peak` 320 now, from that drive, until a drive at the
+corrected scale measures them.
