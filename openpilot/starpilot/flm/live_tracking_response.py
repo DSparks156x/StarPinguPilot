@@ -637,6 +637,8 @@ class ResponseMonitor:
     self.residual_failure_start_ns = self.residual_failure_count = 0
 
   def reset(self, reason):
+    from openpilot.starpilot.flm.tracking_diagnostics import count
+    count('monitor_reset', reason)
     self.rows.clear()
     self.reason = reason
     self.residual_failure_start_ns = self.residual_failure_count = 0
@@ -719,6 +721,9 @@ class ResponseMonitor:
       while self.rows and pose.mono_ns - self.rows[0][0] > WINDOW_NS:
         self.rows.popleft()
       self.reason = 'qualified' if len(self.rows) >= 8 else 'fresh_residual_samples_required'
+      from openpilot.starpilot.flm.tracking_diagnostics import count, maximum
+      count('monitor_pose_accepted')
+      maximum('monitor_rows', len(self.rows))
       # Count ONLY new, source/native/driver/range-qualified physical poses.
       # Missing evidence and interrupted data never count as model drift.
       residual_bad = not source_only and len(self.rows) >= 8 and sum(row[3] ** 2 for row in self.rows) / len(self.rows) > max(0.01, 3 * c.heldout_rmse) ** 2

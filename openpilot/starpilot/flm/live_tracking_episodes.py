@@ -145,6 +145,8 @@ class TrackingEpisodeBuilder:
     self.input_window_count = 0
 
   def interrupt(self, reason, *, preserve_completed=False):
+    from openpilot.starpilot.flm.tracking_diagnostics import count
+    count('episode_interrupt', reason)
     # Completed windows contain ORIGINAL endpoints and original probe deadlines.
     # Keeping those numbers supplies no current witness, offer or permission.
     completed = self.completed.copy() if preserve_completed else OrderedDict()
@@ -363,13 +365,19 @@ class TrackingEpisodeBuilder:
       self.ticks[control.control_ns] = replace(tick, output=output)
       self.last_input_status = 'accepted'
       return True
-    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+      from openpilot.starpilot.flm.tracking_diagnostics import count
+      count('episode_emission_error', error)
       self.interrupt('episode actual native join unqualified', preserve_completed=preserve_completed)
       return False
 
   def _complete(self, end):
+    from openpilot.starpilot.flm.tracking_diagnostics import count
     if self.start and 200_000_000 <= end - self.start <= MAX_EVENT_NS:
+      count('episode_window', self.mode)
       self.pending.append((self.start, end, self.mode, self.first_sign, self.profile))
+    else:
+      count('episode_window_rejected', 'no_start' if not self.start else 'duration')
 
   def _input_window(self, stamp, goal):
     if self.input_window_origin is None:
@@ -708,16 +716,20 @@ class TrackingEpisodeBuilder:
       self._finish()
       self.last_input_status = 'accepted'
       return True
-    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+      from openpilot.starpilot.flm.tracking_diagnostics import count
+      count('episode_pose_error', error)
       self.interrupt('episode original physical join unqualified', preserve_completed=preserve_completed)
       return False
 
   def _finish(self):
+    from openpilot.starpilot.flm.tracking_diagnostics import count
     while self.pending and self.watermark > self.pending[0][1] + 30_000_000:
       start, end, kind, direction, profile = self.pending.popleft()
       ticks = [tick for stamp, tick in self.ticks.items() if start <= stamp <= end]
       points = [point for point in self.endpoints if start <= (point.reference_ns if self.source_tracking else point.control_ns) <= end]
       if not ticks or not 4 <= len(points) <= 240:
+        count('episode_finish', f'endpoints={len(points)}' if len(points) < 4 else 'endpoints>240' if points else 'no_ticks')
         self.reason = 'whole_episode_independent_endpoints_required'
         continue
       stamps = [tick.control.control_ns for tick in ticks]
@@ -729,6 +741,8 @@ class TrackingEpisodeBuilder:
         or any(tick.profile != profile for tick in ticks)
         or max(point.speed for point in points) > 1.15 * min(point.speed for point in points)
       ):
+        count('episode_finish', 'start_tick_missing' if stamps[0] != start else 'control_gap' if not 0 < max_gap <= MAX_CONTROL_GAP_NS
+          else 'profile_changed' if any(tick.profile != profile for tick in ticks) else 'speed_spread')
         continue
       from openpilot.starpilot.flm.live_tracking_probe import validate_probe_result
 
@@ -754,6 +768,7 @@ class TrackingEpisodeBuilder:
         bins[index].append(tick.goal)
       scale = max(0.1, goal_rms) if self.source_tracking else goal_rms
       if scale <= 0 or any(not values for values in bins):
+        count('episode_finish', 'goal_shape')
         self.reason = 'whole_episode_actual_goal_shape_required'
         continue
       goal_shape = tuple(sum(values) / len(values) / scale for values in bins)
@@ -815,6 +830,7 @@ class TrackingEpisodeBuilder:
           group, names = 'all30', self.numeric_probe_names
           deadline = self.numerical_observed_ns + PROBE_DEADLINE_NS
         if any(value[:2] != (group, names) for value in requests.values()) or len(self.completed) >= MAX_COMPLETED:
+          count('episode_finish', 'probe_group_or_backlog')
           self.reason = 'whole_episode_probe_group_or_backlog_unavailable'
           continue
         self.completed[episode.episode_id] = {
@@ -832,6 +848,7 @@ class TrackingEpisodeBuilder:
         self.ready.append(episode)
         self.closed_through_ns = max(self.closed_through_ns, episode.end_ns)
         self.plot = (episode, tuple(points))
+      count('episode_finish', 'deferred_for_probes' if requests or defer else 'ready')
       self.reason = 'qualified_whole_tracking_episode'
 
   def release_measured_only(self):

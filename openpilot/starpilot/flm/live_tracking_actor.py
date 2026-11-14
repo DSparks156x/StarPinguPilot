@@ -754,6 +754,9 @@ class LiveTrackingActor:
         'qualified_control_output_pair_required' if not collector.ready else
         'current_native_permission_unavailable'
       )
+      from openpilot.starpilot.flm.tracking_diagnostics import count
+      count('actor_unavailable', self.reason if self.reason != 'qualified_control_output_pair_required' or not evidence_delay_only
+            else 'ready_empty_after_split')
       # A frozen response job describes ORIGINAL source/native observations,
       # not permission to apply a correction now. Temporary input/native gaps
       # must not cancel that computation after expensive snapshot preparation.

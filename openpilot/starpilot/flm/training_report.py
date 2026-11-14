@@ -169,7 +169,8 @@ class TrainingReporter:
                      tracking_status=tracking.get('status'), tracking_reason=tracking.get('reason'),
                      trial=tracking.get('trialId'), phase=tracking.get('phase'), names=tracking.get('names'),
                      before=tracking.get('beforeEpisodes'), future=tracking.get('futureEpisodes'),
-                     interruptions=details.get('Capture interruptions'), refusals=details.get('GLOBAL source observation refusals'))
+                     interruptions=details.get('Capture interruptions'), refusals=details.get('GLOBAL source observation refusals'),
+                     tracking_diagnostics=details.get('GLOBAL tracking diagnostics'))
     except Exception:
       pass
 
@@ -328,6 +329,8 @@ class TrainingReporter:
         }
         from openpilot.starpilot.flm.source_observation_report import refusal_report
         details['GLOBAL source observation refusals'] = refusal_report(collector)
+        from openpilot.starpilot.flm.tracking_diagnostics import snapshot as tracking_diagnostics
+        details['GLOBAL tracking diagnostics'] = tracking_diagnostics()
         details['GLOBAL response bootstrap readiness'] = dict(getattr(collector, '_live_bootstrap_readiness',
           {'reason': 'response_snapshot_not_attempted'}))
       readiness_reader = getattr(collector, 'snapshot_readiness_report', None)

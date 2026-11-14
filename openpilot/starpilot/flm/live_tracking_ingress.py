@@ -101,13 +101,17 @@ class LiveTrackingIngress:
     lag = self.optimizer.lag_ns
     lower = [(c, o) for c, o in ready if o.apply_ns <= pose.source_lower_ns - lag]
     upper = [(c, o) for c, o in ready if o.apply_ns <= pose.source_upper_ns - lag]
+    from openpilot.starpilot.flm.tracking_diagnostics import count
     if not lower or not upper:
+      count('pose_pair', 'no_ready_output_before_lagged_pose' if ready else 'ready_empty')
       return None
     pair = lower[-1]
     if not 0 <= pose.source_upper_ns - lag - pair[1].apply_ns <= 30_000_000:
+      count('pose_pair', 'lagged_output_older_than_30ms')
       return None
     if pair[1].apply_ns != upper[-1][1].apply_ns:
       if not self.episodes.source_tracking:
+        count('pose_pair', 'output_inside_pose_interval')
         return None  # A plant response still requires one unambiguous input.
       # Source-only tracking compares desired and measured acceleration at the
       # pose time, not a fitted command->response. Retain the genuine earlier
@@ -133,6 +137,8 @@ class LiveTrackingIngress:
   def observe_original_pose(self, pose, collector, *, now_ns, current_native):
     pair = self.original_pose_pair(collector.ready, pose)
     if pair is None:
+      from openpilot.starpilot.flm.tracking_diagnostics import count
+      count('pose_pair_unavailable')
       return None
     return self.observe_pose(pose, *pair, now_ns=now_ns, current_native=current_native)
 
@@ -150,12 +156,16 @@ class LiveTrackingIngress:
       self.optimizer.interrupt(self.monitor.reason)
       self.episodes.interrupt(self.monitor.reason, preserve_completed=preserve)
       return None
+    from openpilot.starpilot.flm.tracking_diagnostics import count
     witness = self.monitor.witness(now_ns)
     if witness is None:
+      count('witness_unavailable', 'rows<8' if len(self.monitor.rows) < 8 else 'validation')
       self.optimizer.interrupt('fresh_physical_residual_window_required')
       return None
     if not self.optimizer.response_current(witness, now_ns=now_ns):
+      count('response_not_current', getattr(self.optimizer, 'reason', ''))
       return None
+    count('witness_current')
     state=self.optimizer.offer_state
     from openpilot.starpilot.flm.live_tracking import discovery_needs_probes
     measurement_only = bool(self.optimizer.discovery is not None and not discovery_needs_probes(self.optimizer.discovery) or
@@ -167,6 +177,7 @@ class LiveTrackingIngress:
     self.episodes.observe_pose(pose, control, output, witness=witness, now_ns=now_ns,
       current_native=current_native, preserve_completed=self._retain_completed())
     for episode in self.episodes.drain(now_ns=now_ns):
+      count('episode_drained', 'scored' if self.scoring_enabled else 'unscored')
       if self.scoring_enabled:
         self.optimizer.observe_episode(episode, now_ns=now_ns)
     # Renew only on a genuine new physical pose; no restamping stale evidence.

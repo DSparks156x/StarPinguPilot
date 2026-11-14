@@ -629,6 +629,8 @@ class LiveTrackingOptimizer:
     self.status, self.reason = 'trial_pending', 'fresh_target_application_after_evidence_gap_required'
 
   def interrupt(self, reason: str, *, context_changed: bool = False) -> None:
+    from openpilot.starpilot.flm.tracking_diagnostics import count
+    count('optimizer_interrupt', reason)
     self.source_recheck = None
     # Retain only inert numerical study intent on missing/stale evidence. The
     # command still rolls back; a fresh baseline ACK must precede a NEW wire
