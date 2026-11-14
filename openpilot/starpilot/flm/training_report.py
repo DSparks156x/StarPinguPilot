@@ -319,6 +319,8 @@ class TrainingReporter:
           'sealed': False if capture is None else capture.sealed,
           'reason': None if capture is None else capture.reason,
           'rejected': 0 if capture is None else capture.rejected,
+          'lastError': None if capture is None else getattr(capture, 'last_error', None),
+          'errors': {} if capture is None else dict(getattr(capture, 'errors', {})),
           'frames': len(replay.records), 'checkpoints': len(replay.checkpoints),
           'emissions': len(replay.emissions.events),
           'controls': 0 if receipts is None else len(receipts.controls),

@@ -5,6 +5,7 @@ actual replay engine and emission recorder. Export does bounded work explicitly
 in the optional learner, never in Controls/Card. This is not fit qualification.
 """
 from openpilot.starpilot.flm.producer_clock_equivalence import clock_uncertainty_limit
+from collections import Counter
 from dataclasses import asdict, dataclass
 import math
 
@@ -186,6 +187,9 @@ class OriginalSourceCapture:
     self.context = None
     self.reason = 'empty'
     self.rejected = 0
+    # StarPinguPilot: callers reset `reason` to a generic refusal right after a rejection, so keep the actual errors
+    self.last_error = ''
+    self.errors = Counter()
     self.sealed = False
     self.epoch = 0
     self.segments = []
@@ -271,6 +275,9 @@ class OriginalSourceCapture:
       return True
     except (AttributeError, TypeError, ValueError, OverflowError) as error:
       self.rejected += 1
+      self.last_error = str(error)[:96]
+      if self.last_error in self.errors or len(self.errors) < 16:
+        self.errors[self.last_error] += 1
       self.reset(str(error))
       return False
 
