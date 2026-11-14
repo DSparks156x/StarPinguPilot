@@ -165,6 +165,10 @@ class RawBlock:
 class FullrateCollector:
   _calibration_generation: str
 
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('collector_reason')
+  del _traced_reason
+
   def __init__(self, adapter):
     self.adapter = adapter
     self.live_tracking = None
@@ -256,6 +260,8 @@ class FullrateCollector:
     return capture.add(value, now_ns, retained_raw_rows=retained + pending)
 
   def split(self, reason, *, reset=False):
+    from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+    diag_count('collector_split', reason if not reset else f'{reason} (hard)')
     self.reset_original_source_capture(reason, hard=reset)
     if self.live_tracking is not None:
       self.live_tracking.interrupt(reason, context_changed=reset)

@@ -121,6 +121,9 @@ class GlobalRuntime:
         controller.response_adapter = self
 
   def _neutral(self, reason):
+    if reason != 'unavailable':
+      from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+      diag_count('controls_neutral', reason)
     self.controller.automatic_flm_effects = None
     if self.live_trial_owner is not None:
       self.live_trial_owner.neutral(reason)
@@ -413,6 +416,13 @@ class GlobalRuntime:
         )[0]
       self.reason = 'qualified'
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+      from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+      if active:
+        diag_count('controls_prepare', error, eligible=self.eligible, healthy=bool(healthy), live_delivery=live_delivery,
+                   receipt_age_ms=(now_ns - int(round(sm.recv_time[receipt_service] * 1e9))) / 1e6 if sm.seen[receipt_service] else None,
+                   sat_time=getattr(self.controller, 'sat_time', None))
+      else:
+        diag_count('controls_prepare_inactive', error)
       self._neutral('unavailable')
       self._pending_trial_interrupted = str(error) == 'interrupted pending trial cannot resume'
 
@@ -778,6 +788,9 @@ class GlobalRuntime:
 
   def capture_evidence(self, *, control_ns, state_ns, active, limited):
     if self.descriptor is None or self.frame is None or self.source is None or not self.identity:
+      if active:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_capture_none', 'missing_descriptor_frame_source_or_identity', descriptor=self.descriptor is not None, frame=self.frame is not None, source=self.source is not None, identity=bool(self.identity), eligible=self.eligible, reason=self.reason)
       return None
     cs, vm, params, log, desired, curvature_limited, delay, requested, values, p, i, d, raw_command = self.frame
     if self.descriptor.domain in ('torque', 'torque_pid'):
@@ -786,6 +799,9 @@ class GlobalRuntime:
         self.controller, log, selected_command=raw_command, prior_policy_output=self.prior_policy_output, prior_policy_ff=self.prior_policy_ff
       )
       if trace is None:
+        if active:
+          from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+          diag_count('controls_capture_none', 'torque_trace_unavailable', stage=self.observation.stage is not None)
         return None
       schema, stage_values, coordinates = trace
       if self.controller.automatic_flm_effects is not None:
@@ -826,9 +842,15 @@ class GlobalRuntime:
     elif self.descriptor.domain == 'ford_curvature':
       # Ford's actual final path angle belongs to the downstream Card host;
       # generic LatControlAngle output is not a valid curvature stage trace.
+      if active:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_capture_none', 'ford_curvature')
       return None
     else:
       if self.stage is None:
+        if active:
+          from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+          diag_count('controls_capture_none', 'stage_missing')
         return None
       actual_stage = dict(getattr(self.controller, 'response_stage', ()))
       baseline_stage = actual_stage.get('baseline_stage', float(self.stage))
@@ -944,6 +966,9 @@ class GlobalRuntime:
       live_values = tuple(value for _, value in application.applied)
     if live_owner is not None and self.controller.automatic_flm_effects is live_owner and not live_values:
       # A consumed but unqualified live map is unknown, never legacy neutral.
+      if active:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_capture_none', 'live_map_unqualified')
       return None
     self.last_capture_frame = self.frame_sequence
     return ControlEvidence(

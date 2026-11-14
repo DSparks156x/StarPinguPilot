@@ -182,6 +182,10 @@ def validate_pose(row, now_ns):
 
 
 class OriginalSourceCapture:
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('source_capture_reason')
+  del _traced_reason
+
   def __init__(self):
     self.rows = []
     self.context = None

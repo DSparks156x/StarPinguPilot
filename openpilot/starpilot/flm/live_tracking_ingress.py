@@ -103,11 +103,13 @@ class LiveTrackingIngress:
     upper = [(c, o) for c, o in ready if o.apply_ns <= pose.source_upper_ns - lag]
     from openpilot.starpilot.flm.tracking_diagnostics import count
     if not lower or not upper:
-      count('pose_pair', 'no_ready_output_before_lagged_pose' if ready else 'ready_empty')
+      count('pose_pair', 'no_ready_output_before_lagged_pose' if ready else 'ready_empty', lag_ms=lag / 1e6, ready=len(ready),
+            oldest_apply_minus_lagged_lower_ms=(ready[0][1].apply_ns - (pose.source_lower_ns - lag)) / 1e6 if ready else None)
       return None
     pair = lower[-1]
     if not 0 <= pose.source_upper_ns - lag - pair[1].apply_ns <= 30_000_000:
-      count('pose_pair', 'lagged_output_older_than_30ms')
+      count('pose_pair', 'lagged_output_older_than_30ms', lag_ms=lag / 1e6, ready=len(ready),
+            gap_ms=(pose.source_upper_ns - lag - pair[1].apply_ns) / 1e6, pose_window_us=(pose.source_upper_ns - pose.source_lower_ns) / 1e3)
       return None
     if pair[1].apply_ns != upper[-1][1].apply_ns:
       if not self.episodes.source_tracking:

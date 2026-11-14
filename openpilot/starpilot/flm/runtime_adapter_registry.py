@@ -682,6 +682,10 @@ def original_source_pose_observer(sm, cp, collector, now_ns, *, distinguish_pend
   from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
   def reject(reason, error=None):
+    from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+    diag_count('pose_reject', reason, error=error, now_ns=now_ns,
+               ready=len(collector.ready), native=getattr(collector, '_learning_current_native_allowed', None),
+               last_apply_age_ms=(now_ns - collector.ready[-1][1].apply_ns) / 1e6 if collector.ready else None)
     from openpilot.starpilot.flm.source_observation_report import record_refusal
     record_refusal(collector, sm, now_ns, reason, error=error)
     collector._original_source_pose_queue = ()

@@ -16,7 +16,9 @@ def control_message(message, owner, cc, *, control_ns, state_ns, limited):
       return
     write_control(message.starpilotLateralState, evidence)
     return True
-  except (AttributeError, TypeError, ValueError, OverflowError):
+  except (AttributeError, TypeError, ValueError, OverflowError) as error:
+    from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+    diag_count('controls_write_error', error)
     # Caller discards its copy after any failed write, including partial fields.
     return False
 
@@ -53,6 +55,7 @@ def applied_snapshot(owner, cc, cs, output, *, apply_ns, state_ns):
         return None
       projection = getattr(controller, 'learning_projection', None)
       if projection is None:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
         previous = getattr(owner, 'learning_previous_applied_evidence', None)
         # No CAN emission means no new command/time. Current health cannot
         # renew the immutable previous command or its original native lease.
@@ -68,10 +71,19 @@ def applied_snapshot(owner, cc, cs, output, *, apply_ns, state_ns):
           # Only carrier metadata advances. The original command/application,
           # state source, codec witness and native permission remain unchanged.
           return replace(previous, carrier_frame=int(controller.frame), carrier_observed_ns=int(apply_ns))
+        if cc.latActive:
+          diag_count('card_applied_none', 'no_projection_and_no_carry', previous=previous is not None, valid=valid, fault=fault,
+                     override=override, gap_ms=(apply_ns - previous.apply_ns) / 1e6 if previous is not None else None)
         return None
       from opendbc.car.steering_projection import inspect_projection
 
-      limited = inspect_projection(owner.CI, cc, output, projection) is not True
+      inspected = inspect_projection(owner.CI, cc, output, projection)
+      limited = inspected is not True
+      if cc.latActive:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('card_applied', 'projection_exact' if inspected is True else 'projection_limited' if inspected is False else 'projection_unknown',
+                   requested=getattr(projection, 'requested_torque', None), final_raw=getattr(projection, 'final_raw', None),
+                   unlimited_raw=getattr(projection, 'unlimited_raw', None), override=override, fault=fault)
     else:
       # These domains require their own actual-emission projection provider;
       # a generic CI.apply call cannot claim a new wire command on hold ticks.
@@ -92,7 +104,9 @@ def applied_snapshot(owner, cc, cs, output, *, apply_ns, state_ns):
       carrier_frame=int(controller.frame),
       carrier_observed_ns=int(apply_ns),
     )
-  except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+  except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+    from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+    diag_count('card_applied_error', error)
     return None
 
 

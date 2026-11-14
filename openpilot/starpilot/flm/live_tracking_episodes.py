@@ -100,6 +100,10 @@ class TrackingEpisodeBuilder:
   time passing alone can never invent their missing independent endpoints.
   """
 
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('episodes_reason')
+  del _traced_reason
+
   def __init__(self, binding, response_certificate, *, controller_domain='torque'):
     binding.validate()
     certificate = validate_certificate(response_certificate)

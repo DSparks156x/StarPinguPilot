@@ -480,6 +480,10 @@ def _comparison_thresholds(variance, inflation, feasible, minimum, alpha):
 
 
 class LiveTrackingOptimizer:
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('optimizer_reason')
+  del _traced_reason
+
   def __init__(
     self, binding: LiveTrialBinding, accepted_full30: tuple[tuple[str, float], ...], *, controller_domain: str, response_certificate: ResponseCertificate
   ):

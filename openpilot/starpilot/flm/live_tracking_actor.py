@@ -210,6 +210,10 @@ def _probe_group_coverage(rows, names, *, kind, direction):
 
 
 class LiveTrackingActor:
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('actor_reason')
+  del _traced_reason
+
   def __init__(self, bootstrap_process=None, *, probe_process=None, source_tracking=False):
     if type(source_tracking) is not bool or source_tracking and bootstrap_process is not None:
       raise ValueError('source tracking has no plant bootstrap process')

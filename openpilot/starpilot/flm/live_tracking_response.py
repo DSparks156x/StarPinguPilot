@@ -629,7 +629,43 @@ def verified_clipped_input(replay, control, output, binding):
     return False
 
 
+def _monitor_sample(c, control, output, pose, binding, now_ns, current_native):
+  """StarPinguPilot diagnostics: which field of a rejected pose/pair failed."""
+  def get(obj, name):
+    return getattr(obj, name, None)
+  lag = get(c, 'lag_ns') or 0
+  lower, upper, apply = get(pose, 'source_lower_ns') or 0, get(pose, 'source_upper_ns') or 0, get(output, 'apply_ns') or 0
+  b = binding
+  try:
+    from openpilot.starpilot.flm.torque_emission_replay import delivered
+    command = -delivered(output)
+  except Exception:
+    command = None
+  return dict(
+    current_native=current_native, binding_matches=b == get(c, 'binding'),
+    ctl_identity_ok=get(control, 'identity') == get(b, 'identity'), ctl_epoch_ok=get(control, 'source_epoch') == get(b, 'source_epoch'),
+    ctl_baseline_ok=get(control, 'baseline_revision') == get(b, 'baseline_revision'),
+    ctl_controller_rev_ok=get(control, 'controller_revision') == get(b, 'controller_revision'),
+    ctl_native_identity_ok=get(control, 'native_identity') == get(b, 'native_identity'),
+    pose_identity_ok=get(pose, 'identity') == get(b, 'identity'), pose_controller_rev_ok=get(pose, 'controller_revision') == get(b, 'controller_revision'),
+    vm_anchor=get(control, 'vehicle_model_anchor'),
+    ctl_flags=''.join(f for f, v in (('O', get(control, 'override')), ('F', get(control, 'fault')), ('S', get(control, 'saturated')),
+                                     ('L', get(control, 'limited')), ('W', get(control, 'model_wobble'))) if v),
+    out_flags=''.join(f for f, v in (('O', get(output, 'override')), ('F', get(output, 'fault')), ('L', get(output, 'limited')),
+                                     ('n', not get(output, 'native_allowed'))) if v),
+    same_control=get(output, 'control_ns') == get(control, 'control_ns'),
+    lag_ms=lag / 1e6, apply_before_lagged_lower_ms=(lower - lag - apply) / 1e6, lagged_upper_minus_apply_ms=(upper - lag - apply) / 1e6,
+    pose_age_ms=(now_ns - (get(pose, 'mono_ns') or 0)) / 1e6,
+    command=command, command_low=get(c, 'command_low'), command_high=get(c, 'command_high'),
+    speed=get(pose, 'speed_mps'),
+  )
+
+
 class ResponseMonitor:
+  from openpilot.starpilot.flm.tracking_diagnostics import traced_reason as _traced_reason
+  reason = _traced_reason('monitor_reason')
+  del _traced_reason
+
   def __init__(self, certificate):
     self.certificate = validate_certificate(certificate)
     self.rows = deque(maxlen=80)
@@ -735,6 +771,11 @@ class ResponseMonitor:
         self.residual_failure_start_ns = self.residual_failure_count = 0
       return True
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
+      from openpilot.starpilot.flm.tracking_diagnostics import count
+      try:
+        count('monitor_reject', error, **_monitor_sample(self.certificate, control, output, pose, binding, now_ns, current_native))
+      except Exception:
+        count('monitor_reject', error)
       self.reset(str(error))
       return False
 

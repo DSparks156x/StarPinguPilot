@@ -462,6 +462,8 @@ def run(
   def clear(reason):
     nonlocal study_health_control
     nonlocal collector, raw_context, active_key, pending_key, pending_token, unavailable_reason, retained_event, pending_event, live_offer
+    from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+    diag_count('learner_clear', reason)
     unavailable_reason = reason
     retained_event = pending_event = None
     if collector is not None:

@@ -146,6 +146,8 @@ class Controls:
         for module in ('controller_replay', 'physical_input_observation', 'feedback_wire', 'live_trial_wire', 'live_tracking_response'):
           importlib.import_module('openpilot.starpilot.flm.' + module)
       except Exception:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_discard_global_learning', 'startup')
         self._discard_global_learning()
 
     from openpilot.starpilot.lateral.controller_selection import model_turn_assist_supported
@@ -458,6 +460,8 @@ class Controls:
           curvature_limited=curvature_limited, lat_delay=lat_delay,
           raw_model_curvature=model_v2.action.desiredCurvature, model_source_ns=int(self.sm.logMonoTime['modelV2']))
       except Exception:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_discard_global_learning', 'prepare_or_begin_frame')
         self._discard_global_learning()
         automatic = None
     if cycle_timing is not None:
@@ -489,6 +493,8 @@ class Controls:
           selected_command=(lateral_output if self.CP.steerControlType in
             (car.CarParams.SteerControlType.angle, car.CarParams.SteerControlType.curvature) else steer))
       except Exception:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_discard_global_learning', 'finish_frame')
         self._discard_global_learning()
     if diagnostic_entry is not None and diagnostic_observer is not None and not CC.latActive:
       try:
@@ -627,6 +633,8 @@ class Controls:
           write_application(learning_feedback.starpilotLateralState, automatic.outcome)
         feedback = learning_feedback
       except Exception:
+        from openpilot.starpilot.flm.tracking_diagnostics import count as diag_count
+        diag_count('controls_discard_global_learning', 'control_message')
         self._discard_global_learning()
     if (automatic is not None and automatic.eligible and automatic.source is not None and
         automatic.source.enabled and not automatic.source.manual and
