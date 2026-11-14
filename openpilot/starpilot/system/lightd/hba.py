@@ -284,6 +284,12 @@ class HbaParams:
   short_sign_min_area: int = 30     # ...when its long-frame core is at least this big (a resolved surface; a small far
                                     # dot this dim is as likely a far car)
   short_min_obs: int = 3            # of the last 5 frames, this many must have a short exposure to say either
+  # how it looks (look_features / look_score, DESIGN.md section 19): a track whose median P(lamp) over its last 5
+  # measured frames is under this is a lit sign or reflector. On the hand-labelled tracks of drives 22/6f/5a/46
+  # (leave-one-drive-out) 0.05 took 35 % of the sign and reflector threat time and missed no car (2 of 105 dipped
+  # 0.9-1.3 s later); 0.1 took 47 % and missed one far pair turning away.
+  look_sign_score: float = 0.05
+  look_min_obs: int = 3
   ev_lamp: float = 6.0              # a measured lamp builds evidence at least this fast (two frames), with or without
                                     # our high beam: the slow far rates exist because a sign can look the same, not this
 
@@ -304,6 +310,7 @@ class Blob:
   glow: float = math.inf  # area at Y >= glow_y connected to the core / core area (inf: not measured or spreading wide)
   post: bool = False    # tall white rectangle without a partner: delineator reflector, not a lamp
   short_peak: float = math.nan  # brightest short-exposure count above black under it (nan: no short exposure)
+  look: float = math.nan  # look_score: P(lamp) from how it looks (nan: not measured)
 
 
 class Obs(NamedTuple):
@@ -328,6 +335,8 @@ class Obs(NamedTuple):
                          # two lanes (x its range). Past roadside_bend_k the road bends that way and it can be a car on it.
                          # Only looked at for would-be roadside lights, 0 otherwise.
   short_peak: float = math.nan  # Blob.short_peak
+  glow: float = math.inf  # Blob.glow
+  look: float = math.nan  # Blob.look
 
 
 @dataclass
@@ -380,6 +389,11 @@ class Track:
     recent = self._short_recent(p)
     return (bool(recent) and self.red_frac <= 0.5 and all(h.short_peak <= p.short_sign_peak for h in recent)
             and all(h.area >= p.short_sign_min_area for h in recent))
+
+  def look_sign(self, p):
+    """It looks like a lit sign or reflector, not a lamp: crisp, no glow spreading around it, no lamp partner."""
+    recent = [h.look for h in self.hist[-5:] if not h.red and math.isfinite(h.look)]
+    return len(recent) >= p.look_min_obs and self.red_frac <= 0.5 and median(np.array(recent)) < p.look_sign_score
 
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
@@ -782,6 +796,9 @@ def find_blobs(frame, mask, p: HbaParams, red_mask=None, box=None):
       if lum is None:
         lum = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
       b.glow = glow_ratio(lum, b, p)
+    if not b.red and b.area <= p.glow_max_core and isinstance(frame, Nv12Frame):
+      f = look_features(frame.y, frame.uv, b.u, b.v)
+      b.look = look_score(f) if f is not None else math.nan
   return blobs
 
 
@@ -907,6 +924,78 @@ def glow_ratio(lum, b: Blob, p: HbaParams):
   if region[0, :].any() or region[-1, :].any() or region[:, 0].any() or region[:, -1].any():
     return math.inf
   return float(region.sum()) / b.area
+
+
+LOOK_WIN = 30  # px each side of the light
+LOOK_KEYS = ("core", "g70", "g40", "r70", "r40", "edge", "cu", "cv", "below", "pair")
+
+
+def look_features(y, uv, u, v):
+  """What a lamp looks like next to a lit sign or reflector, measured around (u, v) on the NV12 frame (DESIGN.md
+  section 19; the same function makes the offline training set, hba_tools/label/features.py). None if no saturated core
+  (Y >= 225) is within 15 px.
+    core      px of that core (4-connected)
+    g70, g40  px connected to the core at Y >= 70 / 40 in the 61x61 window: a lamp's glow spreads, a sign's ends at its
+              edge; r70, r40 their farthest px from the core's centroid
+    edge      mean Y one px outside the core minus 2 px out: a crisp plate drops steeply, a bloom doesn't
+    cu, cv    mean U, V on the core (128 neutral)
+    below     median Y of a box under the light minus one above it: a car's own beams pool on the road under it
+    pair      a second core of similar size (1/3-3x) on its row (|dv| <= 2) 3-60 px away: the other lamp"""
+  h_, w_ = y.shape
+  u, v = int(round(u)), int(round(v))
+  x0, y0 = max(u - LOOK_WIN, 0), max(v - LOOK_WIN, 0)
+  win = y[y0:min(v + LOOK_WIN + 1, h_), x0:min(u + LOOK_WIN + 1, w_)]
+  n, lab, st, cen = cv2.connectedComponentsWithStats((win >= 225).astype(np.uint8), connectivity=4)
+  if n <= 1:
+    return None
+  d = np.hypot(cen[1:, 0] - (u - x0), cen[1:, 1] - (v - y0))
+  i = int(np.argmin(d)) + 1
+  if d[i - 1] > 15:
+    return None
+  core = lab == i
+  cx, cy = cen[i]
+  f = {"core": float(st[i, 4])}
+  for th in (70, 40):
+    _, l2 = cv2.connectedComponents((win >= th).astype(np.uint8), connectivity=8)
+    ids = np.unique(l2[core])
+    reg = np.isin(l2, ids[ids > 0])
+    ys, xs = np.nonzero(reg)
+    f[f"g{th}"] = float(len(ys))
+    f[f"r{th}"] = float(np.max(np.hypot(xs - cx, ys - cy))) if len(xs) else 0.0
+  c8 = core.astype(np.uint8)
+  dil1 = cv2.dilate(c8, np.ones((3, 3), np.uint8)).astype(bool)
+  dil2 = cv2.dilate(c8, np.ones((5, 5), np.uint8)).astype(bool)
+  dil3 = cv2.dilate(c8, np.ones((7, 7), np.uint8)).astype(bool)
+  inner, ring2 = dil1 & ~core, dil3 & ~dil2
+  f["edge"] = float(win[inner].mean() - win[ring2].mean()) if inner.any() and ring2.any() else 0.0
+  yy, xx = np.nonzero(core)
+  yy, xx = (yy + y0) // 2, (xx + x0) // 2
+  f["cu"], f["cv"] = float(uv[yy, 2 * xx].mean()), float(uv[yy, 2 * xx + 1].mean())
+  bw = max(int(st[i, 2]), 4) * 2
+  below = y[min(v + 4, h_ - 1):min(v + 14, h_), max(u - bw, 0):u + bw]
+  above = y[max(v - 14, 0):max(v - 4, 1), max(u - bw, 0):u + bw]
+  f["below"] = float(np.median(below) - np.median(above)) if below.size and above.size else 0.0
+  f["pair"] = 0.0
+  for j in range(1, n):
+    if j != i and abs(cen[j][1] - cy) <= 2 and 3 <= abs(cen[j][0] - cx) <= 60 and 1 / 3 <= st[j, 4] / st[i, 4] <= 3:
+      f["pair"] = 1.0
+  return f
+
+
+def look_vector(f):
+  return np.array([math.log1p(f["g40"]), math.log1p(f["g70"]), f["r40"] / 43, f["r70"] / 43, f["edge"] / 100, f["pair"],
+                   f["below"] / 20, (f["cu"] - 128) / 10, (f["cv"] - 128) / 10, math.log(max(f["core"], 1.0))])
+
+
+# logistic weights on look_vector, fitted on the hand-labelled tracks of drives 22/6f/5a/46 (car_front = 1, sign and
+# reflector = 0; hba_tools/label/fit.py)
+LOOK_W = np.array([1.1898, -0.7303, -0.0438, 2.6628, -3.3966, 1.3753, 0.3855, 0.9370, 0.6059, -0.2950])
+LOOK_B = -1.5869
+
+
+def look_score(f):
+  """P(lamp) from look_features: low is a lit sign or reflector."""
+  return float(1.0 / (1.0 + math.exp(-(float(LOOK_W @ look_vector(f)) + LOOK_B))))
 
 
 def town_lights(frame, geom: Geometry, center, mask, p: HbaParams, box=None):
@@ -1298,7 +1387,7 @@ class HbaClassifier:
       reach = lamp_reach(geom, b.u, b.v, center, lanes if p.oncoming_side < 0 else lanes[::-1], p)
       bend = reach / dist if math.isfinite(reach) else 0.0
     return Obs(t, b.u, b.v, dist, lateral, b.area, b.red, b.peak_y, angle, b.paired, b.post, b.flux, b.sat, high, b.partner,
-               b.glow < p.glow_ratio, bend, b.short_peak)
+               b.area >= p.glow_min_core and b.glow < p.glow_ratio, bend, b.short_peak, b.glow, b.look)
 
   def _beam_check(self, tr: Track):
     """A track seen on both sides of a switch of our high beam whose brightness followed it is a retroreflector."""
@@ -1329,7 +1418,7 @@ class HbaClassifier:
     last = tr.hist[-1]
     oncoming_side = not np.isfinite(last.angle) or p.oncoming_side * last.angle > -p.glare_side_deg
     if (tr.strong(p) and not last.red and not last.high and not last.post and oncoming_side and tr.kind == KIND_STATIC
-        and not tr.reflector and tr.why not in ("sign", "short")):  # a light that followed our own switching, whose
+        and not tr.reflector and tr.why not in ("sign", "short", "look")):  # a light that followed our own switching, whose
                                                      # glow ends at its edge, or that is dim in the short exposure, is a
                                                      # sign, however bright
       tr.kind, tr.why = KIND_ONCOMING, "glare"
@@ -1357,7 +1446,8 @@ class HbaClassifier:
         tr.kind, tr.why = KIND_STATIC, "beam"
         return
     recent = tr.hist[-5:]
-    for why, surface in (("sign", sum(h.compact for h in recent) * 2 > len(recent)), ("short", tr.short_sign(p))):
+    for why, surface in (("sign", sum(h.compact for h in recent) * 2 > len(recent)), ("short", tr.short_sign(p)),
+                         ("look", tr.look_sign(p))):
       # its glow ends at its edge, or it is dim in the short exposure: a sign our beams light, not a lamp (unless it
       # shows a lamp pair, or moves at us)
       if lamp or not surface or sum(h.partner for h in recent) >= 3:

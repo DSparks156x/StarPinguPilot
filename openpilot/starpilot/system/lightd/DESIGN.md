@@ -1228,3 +1228,49 @@ case is fixed without touching it, so it stays until a morning drive shows it ma
 Y ~167 and the HBA saw no white light at all. Fixed in camerad (`CAMERA_HDR.md` §13). That drive's reflector peaks, rescaled,
 were ~5x the estimate above: `short_lamp_peak` 640 and `short_sign_peak` 320 now, from that drive, until a drive at the
 corrected scale measures them.
+
+## 19. Drive `00000022` (2026-11-14): sign dips, the short exposure and small halos, measured
+
+**The drive.** Night, staggered HDR on at the corrected scale, HBA in control. 38 dips while permitted. On video (long
+exposure), the 12 at speed with our high beam on: 9 white signs or reflectors (white plates among yellow curve signs, a
+row of delineators), 1 real car's taillights, 1 far red dot (probably a taillight), 2 ambiguous. Nearly all dipped while
+the light was a 2-8 px dot on `ev_lone` (2 s), before any size-gated rule applies.
+
+**Short exposure.** Near lamps clip it (959); same-row lamp pairs read ~200-350 counts at 150-300 m. Far sign dots read
+10-50. But a real oncoming car (seg 10, idx ~527-616, verified on video) read 14-26 for 4 s, then 300+ from one frame to
+the next with no visible change: LED PWM beating with the 1.27 ms exposure. So only brightness proves anything (a lamp);
+a dim reading does not clear a light. No "dim = not a lamp" rule.
+
+**Halo of small blobs, first try (wrong).** Measured against the replay's rule-based hindsight labels, the glow ratio
+at Y >= 70 looked useless under ~10 px. Those labels were wrong far too often (by video: construction barrels and arrow
+boards labelled vehicle, a headlight pair labelled static), and the ratio was the wrong measure.
+
+**Hand-checked labels** (`hba_tools/label/`, README there). 320 white threat tracks (dark, > 54 km/h, >= 1 s), 80 from
+each of 00000022 / 6f / 5a / 46, shown as contact sheets (context + far / mid / near zooms) and labelled by eye:
+car_front 107, sign 73, fixed_lamp 73, unsure 54, car_rear 11, reflector 7. Three "cars" the first model refused turned
+out on video to be a white plate next to a yellow diamond (#77, #81) and a plate with no car following (#78): fixed.
+
+**What separates them** (`look_features` in hba.py, the same function makes the training set): around the light, the
+area connected to the saturated core at Y >= 40 and Y >= 70 and how far it reaches (a lamp's glow spreads, a lit
+plate's ends at its edge), the edge drop 1 -> 2-3 px out (crisp plate), a lamp partner on the row, light pooled on the
+road under it, and core colour. At a 1-4 px core, g40 alone: median 920 px on cars, 101 on signs (AUC 0.81). A logistic
+score over all of them: AUC 0.87 per frame, leave-one-drive-out.
+
+**The rule** (`Track.look_sign`): median score of the last 5 measured frames < `look_sign_score` 0.05 -> static
+"look", like the compact-sign rule (a lamp partner on 3 of 5, measured oncoming motion or a short-exposure lamp
+overrides it). Held-out simulation on the labelled tracks: 35 % of sign and reflector threat time gone, no car missed,
+2 of 105 car tracks dipped 0.9-1.3 s later (0.1: 47 %, one far pair turning away missed).
+
+**Full replays** (`runs/g*` before, `runs/v*` with it; score.py, replay permit):
+
+| drive | nuisance s | glare s | toggles / min | on % |
+|---|---|---|---|---|
+| 6f | 213.5 -> 182.8 | 1.6 -> 1.6 | 2.07 -> 1.81 | 46.5 -> 49.8 |
+| 5a | 204.2 -> 180.4 | 1.7 -> 1.7 | 1.88 -> 1.73 | 39.3 -> 41.3 |
+| 46 | 134.4 -> 122.2 | 1.6 -> 1.7 | 1.48 -> 1.54 | 30.9 -> 32.1 |
+| 22 | 251.2 -> 218.8 | 4.5 -> 4.8 | 1.50 -> 1.45 | 36.9 -> 39.3 |
+
+The extra glare (`rundiff.py`): 22 seg 15 0.3 s, a 2-4 px white dot far across a valley among house lights, chained as
+an approaching car by score.py, not confirmable on video, our beam off at the time; 46 seg 15 0.1 s, a taillight (the
+rule never applies to red), timing noise. The weights are fitted on these four drives, so the next drives are the real
+test; the short-exposure capture (`tools/short_exposure_capture.py`) runs on the device to add those frames.

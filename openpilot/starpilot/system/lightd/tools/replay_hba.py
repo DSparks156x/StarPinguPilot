@@ -32,7 +32,6 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-from openpilot.cereal import log
 from openpilot.starpilot.system.lightd.lightd import HBA_PERIOD_S, MODEL_MAX_FRAME_LAG, WIDE_PERIOD_S, mapd_speed_limit, model_dict
 from openpilot.starpilot.system.lightd.solar import solar_position
 from openpilot.tools.lib.logreader import LogReader
@@ -41,7 +40,7 @@ FRAME_COLS = ("seg", "idx", "t", "frame_id", "truth", "v", "dark", "high_beam", 
               "n_preceding", "n_candidates", "lead_prob", "town", "town_lights", "lamp", "n_wide", "ms")
 WIDE_COLS = ("seg", "idx", "t", "u", "v", "area", "peak", "chroma", "ring", "reach", "lamp", "permitted")
 TRACK_COLS = ("seg", "t", "frame_id", "tid", "u", "v", "pred_err", "area", "peak", "red", "paired", "post", "flux", "sat", "dist",
-              "lateral", "kind", "why", "obj_speed", "age", "reflector", "threat", "label", "partner", "compact", "bend")
+              "lateral", "kind", "why", "obj_speed", "age", "reflector", "threat", "label", "partner", "compact", "bend", "glow", "look")
 KIND_BGR = {"oncoming": (0, 0, 255), "preceding": (0, 165, 255), "candidate": (255, 0, 255), "static": (0, 200, 0)}
 
 
@@ -89,22 +88,22 @@ class SegmentLog:
     self.gps = None
     for m in LogReader(path, sort_by_time=True, only_union_types=True):
       w, t = m.which(), m.logMonoTime * 1e-9
-      if w == "roadEncodeIdx":
-        e = m.roadEncodeIdx
+      if w in ("roadEncodeIdx", "narrowRoadEncodeIdx"):  # StarPilot 6 / 7 names
+        e = getattr(m, w)
         self.enc[e.segmentId] = (e.frameId, e.timestampEof * 1e-9)
       elif w == "wideRoadEncodeIdx":
         self.wide_enc[m.wideRoadEncodeIdx.segmentId] = m.wideRoadEncodeIdx.frameId
       elif w == "modelV2":
         self.models[m.modelV2.frameId] = model_dict(m.modelV2)
-      elif w == "extrinsicsCalibration":
-        c = m.extrinsicsCalibration
-        calibrated = c.calStatus == log.LiveCalibrationData.Status.calibrated and len(c.rpyCalib) == 3
+      elif w in ("extrinsicsCalibration", "liveCalibration"):
+        c = getattr(m, w)
+        calibrated = str(c.calStatus) == "calibrated" and len(c.rpyCalib) == 3
         wide = list(c.wideFromDeviceEuler) if calibrated and len(c.wideFromDeviceEuler) == 3 else None
         self.calib.append((t, list(c.rpyCalib) if calibrated else None, c.height[0] if len(c.height) else 1.22, wide))
       elif w == "carState":
         self.car.append((t, m.carState.vEgo))
-      elif w == "deviceMotion":
-        a = m.deviceMotion.angularVelocityDevice
+      elif w in ("deviceMotion", "livePose"):
+        a = getattr(m, w).angularVelocityDevice
         self.pose.append((t, a.x, a.y, a.z))
       elif w == "can":
         for f in m.can:
@@ -418,7 +417,7 @@ def main():
                          "obj_speed": tr.obj_speed, "age": getattr(tr, "age_s", getattr(tr, "age", 0)),
                          "reflector": int(getattr(tr, "reflector", False)), "threat": int(tr.is_threat(clf.p)),
                          "partner": int(getattr(h, "partner", False)), "compact": int(getattr(h, "compact", False)),
-                         "bend": round(float(getattr(h, "bend", 0.0)), 2)})
+                         "bend": round(float(getattr(h, "bend", 0.0)), 2), "glow": round(float(getattr(h, "glow", math.inf)), 2), "look": round(float(getattr(h, "look", math.nan)), 3)})
         changed = last_permit is not None and out.high_beam_permitted != last_permit
         last_permit = out.high_beam_permitted
         wanted = (n, idx // 2) in jpg_at  # video index at 20 Hz, --at in tenths of a second

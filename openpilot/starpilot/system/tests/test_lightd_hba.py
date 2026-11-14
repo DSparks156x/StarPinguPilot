@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -9,6 +10,7 @@ from openpilot.starpilot.system.lightd.hba import (ECAM_H, ECAM_W, FCAM_H, FCAM_
                                                     corridor_mask, find_blobs, HbaParams, KIND_STATIC, road_centerline,
                                                     rot_from_euler, rotate_pixel, wide_lights, wide_params)
 from openpilot.starpilot.system.lightd.hba import _geomspace, _slopes, candidate_ymin, colour_masks, median, town_lights, union_box
+from openpilot.starpilot.system.lightd.hba import look_features, look_score
 
 HEIGHT = 1.22
 STRAIGHT = {
@@ -749,8 +751,9 @@ def test_nv12_blobs_match_full_conversion(seed, n):
   for rm, b in ((None, box), (red_mask, union_box(box, red_box))):
     ref = find_blobs(bgr, mask, p, rm)
     assert len(ref) > 0
-    assert find_blobs(frame, mask, p, rm) == ref
-    assert find_blobs(frame, mask, p, rm, b) == ref
+    # look_score needs the NV12 planes: the BGR path leaves it unmeasured
+    assert [replace(x, look=math.nan) for x in find_blobs(frame, mask, p, rm)] == ref
+    assert [replace(x, look=math.nan) for x in find_blobs(frame, mask, p, rm, b)] == ref
 
 
 def test_town_lights_box_and_pooling():
@@ -768,3 +771,60 @@ def test_town_lights_box_and_pooling():
     draw_lamp(img, int(u), int(v), int(rng.integers(1, 4)), color=(240, 240, 240))
   n = town_lights(img, geom, center, mask, p)
   assert n > 10 and town_lights(img, geom, center, mask, p, box) == n
+
+
+def nv12_of(bgr):
+  i420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
+  h, w = bgr.shape[:2]
+  uv = np.empty((h // 2, w), np.uint8)
+  uv[:, 0::2] = i420[h:h + h // 4].reshape(h // 2, w // 2)
+  uv[:, 1::2] = i420[h + h // 4:].reshape(h // 2, w // 2)
+  return i420[:h], uv
+
+
+def bloom(img, u, v, peak, sigma):
+  yy, xx = np.mgrid[:img.shape[0], :img.shape[1]]
+  g = peak * np.exp(-((xx - u) ** 2 + (yy - v) ** 2) / (2 * sigma ** 2))
+  return np.maximum(img, np.clip(g, 0, 255)[..., None].astype(np.uint8))
+
+
+def test_look_score_tells_a_lamp_pair_from_a_lit_plate():
+  """A far headlight pair blooms (glow spreading well past the cores, a partner on the row, light under it); a white
+  plate lit by our beams is a crisp saturated patch on black (DESIGN.md section 19)."""
+  plate = dark_frame()
+  plate[399:405, 699:707] = 255
+  y, uv = nv12_of(cv2.GaussianBlur(plate, (0, 0), 0.8))  # the lens: a crisp edge still spreads ~1 px
+  f = look_features(y, uv, 702.5, 401.5)
+  assert f is not None and f["pair"] == 0.0 and f["g40"] < 150
+  assert look_score(f) < HbaParams().look_sign_score
+
+  lamps = dark_frame().astype(np.float32)
+  for u in (690, 704):
+    lamps = bloom(lamps, u, 400, 900.0, 4.0)
+  lamps[404:412, 680:715] = np.maximum(lamps[404:412, 680:715], 60)  # our-road pool under the car
+  y, uv = nv12_of(np.clip(lamps, 0, 255).astype(np.uint8))
+  f = look_features(y, uv, 690, 400)
+  assert f is not None and f["pair"] == 1.0
+  assert look_score(f) > 0.5
+
+
+def test_look_features_need_a_saturated_core():
+  y, uv = nv12_of(dark_frame())
+  assert look_features(y, uv, 700, 400) is None
+
+
+def test_a_track_that_looks_like_a_plate_is_a_static_sign():
+  p = HbaParams()
+  geom = Geometry([0.0, 0.0, 0.0], HEIGHT)
+  clf = HbaClassifier(p)
+  frames = []
+  for i in range(12):
+    img = dark_frame()
+    uv_, ok = geom.project(np.array([[160.0 - 2 * i, 2.0, HEIGHT - 1.0]]))
+    u, v = (int(round(c)) for c in uv_[0])
+    img[v - 2:v + 3, u - 3:u + 3] = 255
+    y, uv = nv12_of(cv2.GaussianBlur(img, (0, 0), 0.8))
+    frames.append(Nv12Frame(y, uv))
+  run(clf, frames)
+  live = [tr for tr in clf.tracks if not tr.missed]
+  assert live and all(tr.kind == KIND_STATIC and tr.why == "look" for tr in live)
