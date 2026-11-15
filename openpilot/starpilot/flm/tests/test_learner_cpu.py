@@ -32,9 +32,9 @@ def placement(monkeypatch):
   return state
 
 
-def test_receiver_uses_model_core_and_balanced_cluster(placement: State):
+def test_receiver_uses_big_model_core_at_normal_priority(placement: State):
   assert cpu.configure_cpu()
-  assert placement.calls[-2:]==[('affinity',0,{0,1,2,3,7}),('nice',0,0,0)]
+  assert placement.calls[-2:]==[('affinity',0,{7}),('nice',0,0,0)]
 
 
 def test_numerical_child_uses_background_cluster(placement: State):

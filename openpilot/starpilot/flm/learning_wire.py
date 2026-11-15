@@ -80,6 +80,25 @@ def _shared_scalar_pair(name, value):
   return _scalar_pair(name, type(value), struct.pack('!d', value) if type(value) is float else value)
 
 
+@lru_cache(maxsize=2048)
+def _checked_name(name):
+  # StarPinguPilot: the same ~60 names arrive every frame; bound-check and share each one once.
+  return _evidence_field_name(_string(name, 96))
+
+
+_FLOAT = struct.Struct('!d')
+
+
+def _share_checked(name, value):
+  # _shared_scalar_pair for a name already bounded by _checked_name (<= 96 bytes, non-empty).
+  kind = type(value)
+  if kind is float:
+    return _scalar_pair(name, float, _FLOAT.pack(value))
+  if kind is str and _utf8_len(value) > 96:
+    return name, value
+  return _scalar_pair(name, kind, value)
+
+
 def _read_named_values(values, bound):
   if len(values) > bound:
     raise ValueError('replay scalar bounds')
@@ -108,6 +127,111 @@ def _read_original_inputs(values):
   if not valid_inputs(result):
     raise ValueError('versioned original replay input bounds')
   return result
+
+
+# StarPinguPilot: packed named values (LearningControlEvidence.packedNamedValues).
+# Layout: magic, three counts, NUL-joined UTF-8 names, one kind byte per value
+# (n number, b boolean, t text), little-endian float64 for numbers and booleans,
+# NUL-joined UTF-8 texts. Readers apply the same name/value bounds as the lists.
+_PACKED_MAGIC = b'PNV1'
+_PACKED_HEADER = struct.Struct('<4sHHHI')
+_PACKED_LIMITS = (1024, EXTENDED_INPUTS, 40)
+
+
+def pack_named_values(snapshot, inputs, stage):
+  names, kinds, numbers, texts = [], bytearray(), [], []
+  for section, rows in enumerate((snapshot, inputs, stage)):
+    if len(rows) > _PACKED_LIMITS[section]:
+      raise ValueError('packed named value bounds')
+    for name, value in rows:
+      if '\x00' in name:
+        raise ValueError('packed name')
+      names.append(name)
+      if section == 2:
+        kinds.append(0x6E)  # n
+        numbers.append(float(value))
+      elif type(value) is bool:
+        kinds.append(0x62)  # b
+        numbers.append(1.0 if value else 0.0)
+      elif type(value) is str:
+        if '\x00' in value:
+          raise ValueError('packed text')
+        kinds.append(0x74)  # t
+        texts.append(value)
+      else:
+        kinds.append(0x6E)
+        numbers.append(float(value))
+  name_blob = '\x00'.join(names).encode('utf-8')
+  text_blob = '\x00'.join(texts).encode('utf-8')
+  return b''.join((
+    _PACKED_HEADER.pack(_PACKED_MAGIC, len(snapshot), len(inputs), len(stage), len(name_blob)), name_blob, bytes(kinds),
+    struct.pack(f'<{len(numbers)}d', *numbers), struct.pack('<I', len(text_blob)), text_blob,
+  ))
+
+
+def unpack_named_values(data):
+  """Exact (name, value) rows per section; raises ValueError on any malformed blob."""
+  try:
+    data = bytes(data)
+    magic, n_snapshot, n_inputs, n_stage, name_len = _PACKED_HEADER.unpack_from(data, 0)
+    counts = (n_snapshot, n_inputs, n_stage)
+    if magic != _PACKED_MAGIC or any(count > limit for count, limit in zip(counts, _PACKED_LIMITS, strict=True)):
+      raise ValueError('packed named value header')
+    total = n_snapshot + n_inputs + n_stage
+    offset = _PACKED_HEADER.size
+    names = data[offset:offset + name_len].decode('utf-8').split('\x00') if total else []
+    offset += name_len
+    kinds = data[offset:offset + total]
+    offset += total
+    if len(names) != total or len(kinds) != total or any(kind not in b'nbt' for kind in kinds):
+      raise ValueError('packed named value layout')
+    n_numbers = total - kinds.count(0x74)
+    numbers = struct.unpack_from(f'<{n_numbers}d', data, offset)
+    offset += 8 * n_numbers
+    (text_len,) = struct.unpack_from('<I', data, offset)
+    offset += 4
+    if offset + text_len != len(data):
+      raise ValueError('packed named value length')
+    n_texts = total - n_numbers
+    texts = data[offset:].decode('utf-8').split('\x00') if n_texts else []
+    if len(texts) != n_texts or (not n_texts and text_len):
+      raise ValueError('packed named value texts')
+  except (struct.error, UnicodeDecodeError) as error:
+    raise ValueError('packed named values') from error
+  rows, number_index, text_index = [], 0, 0
+  for name, kind in zip(names, kinds, strict=True):
+    if kind == 0x74:
+      rows.append((name, texts[text_index]))
+      text_index += 1
+    else:
+      value = numbers[number_index]
+      number_index += 1
+      if kind == 0x62:
+        if value not in (0.0, 1.0):
+          raise ValueError('packed boolean')
+        value = value == 1.0
+      rows.append((name, value))
+  return rows[:n_snapshot], rows[n_snapshot:n_snapshot + n_inputs], rows[n_snapshot + n_inputs:]
+
+
+def _checked_pairs(rows, bound):
+  # Same name/value checks as _read_named_values on the capnp lists.
+  if len(rows) > bound:
+    raise ValueError('replay scalar bounds')
+  result = []
+  for name, value in rows:
+    name = _checked_name(name)
+    value = value if type(value) is bool else _string(value, 96) if type(value) is str else float(value)
+    result.append(_share_checked(name, value))
+  return tuple(result)
+
+
+def replay_snapshot_count(row):
+  """Number of replay snapshot values in a LearningControlEvidence row, packed or listed."""
+  packed = getattr(row, 'packedNamedValues', b'')
+  if len(packed):
+    return len(unpack_named_values(packed)[0])
+  return len(row.replaySnapshot)
 
 
 def _write_effect_trace(trace):
@@ -185,7 +309,6 @@ def write_control(parent, evidence):
     'features': evidence.features,
     'baselinePrediction': evidence.baseline_prediction,
     'stageSchemaRevision': _string(evidence.stage_schema_revision),
-    'stageValues': _named_pairs(evidence.stage_values, 64),
     'appliedCoordinates': evidence.applied_coordinates,
     'sourceEpoch': evidence.source_epoch,
     'sourceReceiptMonoTime': evidence.source_receipt_ns,
@@ -194,8 +317,9 @@ def write_control(parent, evidence):
     'baselineRevision': evidence.baseline_revision,
     'baselineValues': evidence.baseline_values,
     'controllerRevision': _string(evidence.controller_revision),
-    'replaySnapshot': _named_pairs(evidence.replay_snapshot),
-    'replayInputs': _named_pairs(evidence.replay_inputs),
+    # StarPinguPilot: one packed blob instead of the replaySnapshot/replayInputs/stageValues lists.
+    'packedNamedValues': pack_named_values(_named_pairs(evidence.replay_snapshot), _named_pairs(evidence.replay_inputs),
+                                           _named_pairs(evidence.stage_values, 64)),
     'snapshotSequence': evidence.snapshot_sequence,
     'vehicleModelAnchor': evidence.vehicle_model_anchor,
     'liveAppliedCoordinates': evidence.live_applied_coordinates,
@@ -273,6 +397,23 @@ def read_control(event):
   ):
     raise ValueError('control version or bound')
   row = _read_fields(row, custom.LearningControlEvidence.schema)
+  packed = row.packedNamedValues
+  if len(packed):
+    # StarPinguPilot: packed sender; the three lists must be empty and every value gets the list path's checks.
+    if len(row.replaySnapshot) or len(row.replayInputs) or len(row.stageValues):
+      raise ValueError('packed and listed named values')
+    snapshot_rows, input_rows, stage_rows = unpack_named_values(packed)
+    if any(type(value) is not float for _, value in stage_rows):
+      raise ValueError('packed stage value kind')
+    stage_values = tuple(_shared_scalar_pair(name, value) for name, value in stage_rows)
+    replay_snapshot = _checked_pairs(snapshot_rows, 1024)
+    replay_inputs = _checked_pairs(input_rows, EXTENDED_INPUTS)
+    if not valid_inputs(replay_inputs):
+      raise ValueError('versioned original replay input bounds')
+  else:
+    stage_values = tuple(_shared_scalar_pair(str(v.name), float(v.value)) for v in row.stageValues)
+    replay_snapshot = _read_named_values(row.replaySnapshot, 1024)
+    replay_inputs = _read_original_inputs(row.replayInputs)
   return ControlEvidence(
     str(row.identity),
     int(row.generation),
@@ -295,7 +436,7 @@ def read_control(event):
     bool(row.modelWobble),
     bool(row.controllerChatter),
     str(row.stageSchemaRevision),
-    tuple(_shared_scalar_pair(str(v.name), float(v.value)) for v in row.stageValues),
+    stage_values,
     tuple(float(v) for v in row.appliedCoordinates),
     str(row.sourceEpoch),
     int(row.sourceReceiptMonoTime),
@@ -304,8 +445,8 @@ def read_control(event):
     str(row.baselineRevision),
     tuple(float(v) for v in row.baselineValues),
     str(row.controllerRevision),
-    _read_named_values(row.replaySnapshot, 1024),
-    _read_original_inputs(row.replayInputs),
+    replay_snapshot,
+    replay_inputs,
     int(row.snapshotSequence),
     bool(row.turnAssist),
     tuple(_string(str(name)) for name in row.appliedParameterNames),

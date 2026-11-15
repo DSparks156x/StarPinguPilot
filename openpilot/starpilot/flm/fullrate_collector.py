@@ -888,12 +888,14 @@ class FullrateCollector:
 
 
 def _check_evidence_wire(event):
+  from openpilot.starpilot.flm.learning_wire import replay_snapshot_count as _replay_snapshot_count
   wire_bytes = len(event.as_builder().to_bytes())
   if wire_bytes > MAX_SNAPSHOT_WIRE_BYTES:
     raise ValueError('wire_bound')
   if wire_bytes > MAX_WIRE_BYTES:
     kind = event.which()
-    control_snapshot = kind == 'starpilotLateralState' and bool(len(event.starpilotLateralState.learningEvidence.replaySnapshot))
+    control_snapshot = (kind == 'starpilotLateralState' and
+                        bool(_replay_snapshot_count(event.starpilotLateralState.learningEvidence)))
     ford_events = (
       kind == 'starpilotCarState'
       and event.starpilotCarState.fordLearningEvidence.version == 1

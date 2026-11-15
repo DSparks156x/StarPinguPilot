@@ -88,10 +88,12 @@ def test_actual_active_lateral_driver_gas_retains_control_and_consumed_can_evide
     wire = messaging.log_from_bytes(evidence.to_bytes()).starpilotLateralState.learningEvidence
     assert wire.version == 1 and wire.active and wire.valid and not wire.override
     assert not wire.manual and wire.enabled
-    assert wire.stageValues and wire.replayInputs
+    from openpilot.starpilot.flm.learning_wire import unpack_named_values
+    _, replay_inputs, stage_values = unpack_named_values(wire.packedNamedValues)
+    assert stage_values and replay_inputs
     if lac_type is LatControlPID:
       assert wire.stageSchemaRevision == 'pid-selected-stage-snapshot-v2'
-      values = {str(row.name): float(row.value) for row in wire.stageValues}
+      values = dict(stage_values)
       assert abs(values['angle_error_deg']) < .01
       assert values['baseline_ff'] != 0. and values['ff_factor'] == pytest.approx(controls.LaC.ff_factor)
       assert values['pid_f'] == pytest.approx(float(controls.LaC.pid.f))

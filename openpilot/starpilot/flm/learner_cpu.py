@@ -23,10 +23,11 @@ def configure_cpu(*, numerical=False):
       return False
     if online != '1':
       return False
-    # StarPinguPilot: core 7 alone starved it. On a comma 4 drive modeld (FIFO) and dmonitoringmodeld (FIFO) kept core 7
-    # 89% busy, the receiver got ~60% of a core it needed more of, fell behind its 100 ms row limits and never launched a
-    # trial, while an unthrottled replay of the same drive did. Let it also use the balanced cluster, at normal priority.
-    mask = {0, 1, 2, 3, 7}
+    # StarPinguPilot: big core 7 only, at normal priority. Cores 6/7 are isolated from load balancing, so a {0-3, 7} mask
+    # left the receiver on the little 1.8 GHz cores 0-3 (61-82% busy while engaged), roughly 3x slower per cycle than
+    # the 2.8 GHz big core. On drive 00000025 core 7 averaged 23% busy with the learner off it: the earlier "89% busy"
+    # included the learner itself. modeld/dmonitoringmodeld stay FIFO and always preempt it.
+    mask = {7}
   if os.sched_getscheduler(0) != os.SCHED_OTHER:
     raise ValueError('optional learner requires ordinary scheduling')
   os.sched_setaffinity(0, mask)

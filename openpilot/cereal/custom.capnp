@@ -1329,6 +1329,10 @@ struct LearningControlEvidence @0xf2447170bb68f358 {
   effectPrepareMonoTime @45 :UInt64; # Exact MONOTONIC owner tick, not carControl publication.
   vehicleModelAnchor @46 :List(Float64); # Actual owner stable (sR,cF,cR), empty on old senders.
   liveAppliedCoordinates @47 :List(Float64); # Actual same-frame live full30 hooks, never offered target.
+  # StarPinguPilot: replaySnapshot, replayInputs and stageValues packed into one blob (learning_wire.pack_named_values).
+  # pycapnp reads each list element at ~10 us on a comma 4, which kept the learner CPU-bound at 100 Hz. When this is
+  # set the three lists are empty; old logs still carry the lists.
+  packedNamedValues @48 :Data;
   struct FullEffectTrace {
     version @0 :UInt16;
     envelope @1 :AutomaticRuntimeProfile.FullSurfaceEnvelope;
