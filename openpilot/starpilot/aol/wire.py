@@ -150,6 +150,7 @@ def _read_intent(value) -> IntentState | None:
 
 
 @_memoized
+@_memoized  # StarPinguPilot: frozen result; the FLM learner re-checks the same 10 Hz wire hundreds of times a second
 def decode_safety(raw: bytes) -> SafetyState | None:
   return _payload(raw, custom.AolAxisState.SafetyWire, SAFETY_KIND, _read_safety,
                   (WIRE_VERSION, SAFETY_INVENTORY_VERSION))

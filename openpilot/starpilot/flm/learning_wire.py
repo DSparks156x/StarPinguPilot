@@ -41,8 +41,13 @@ MAX_FIELDS = 8
 MAX_IDS = 24
 
 
+def _utf8_len(value):
+  # StarPinguPilot: ASCII text encodes to exactly len() bytes; skip building the bytes object
+  return len(value) if value.isascii() else len(value.encode())
+
+
 def _string(value, limit=96):
-  if type(value) is not str or not value or len(value.encode()) > limit:
+  if type(value) is not str or not value or _utf8_len(value) > limit:
     raise ValueError('bounded string')
   return value
 
@@ -70,7 +75,7 @@ def _scalar_pair(name, kind, value):
 
 def _shared_scalar_pair(name, value):
   # Share exact immutable content, including IEEE signed zero; never a verdict.
-  if not name or len(name.encode()) > 96 or type(value) is str and len(value.encode()) > 96:
+  if not name or _utf8_len(name) > 96 or type(value) is str and _utf8_len(value) > 96:
     return name, value
   return _scalar_pair(name, type(value), struct.pack('!d', value) if type(value) is float else value)
 

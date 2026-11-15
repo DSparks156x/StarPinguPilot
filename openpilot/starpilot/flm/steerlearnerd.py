@@ -1208,6 +1208,9 @@ def main():
   if gc_was_enabled:
     # Reclaim startup cycles; temporary visitors release their own graphs.
     gc.collect()
+    # StarPinguPilot: move everything that survived startup (modules, CarParams, adapters) out of the collected
+    # generations. Full collections otherwise rescan it and paused the engaged loop up to 343 ms (drive 00000025).
+    gc.freeze()
     # Keep standard GC enabled; recursive temporary visitors release explicitly.
   try:
     run(

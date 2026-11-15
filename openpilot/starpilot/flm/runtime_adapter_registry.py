@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import time
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 import importlib
 from opendbc.car.car_helpers import interfaces
@@ -117,7 +117,13 @@ def native_identity_key(native):
 
 
 def native_identity_digest(key):
-  return '' if key is None else hashlib.sha256(repr(key).encode('utf-8')).hexdigest()
+  return '' if key is None else _native_identity_digest(key)
+
+
+@lru_cache(maxsize=16)
+def _native_identity_digest(key):
+  # StarPinguPilot: pure function of a hashable tuple; recomputed for every evidence frame otherwise
+  return hashlib.sha256(repr(key).encode('utf-8')).hexdigest()
 
 
 def current_authority(sm, cp, *, now_ns, required):
