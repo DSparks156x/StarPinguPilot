@@ -232,6 +232,25 @@ class TestLaneCentering(unittest.TestCase):
     self.assertAlmostEqual(full_e2e, 0.0)
     self.assertAlmostEqual(uncertain, no_e2e)
 
+  def test_e2e_break_in_keeps_correcting_a_path_cutting_inside_the_bend(self):
+    # StarPinguPilot: lanes bend right (k=0.004 at 20 m: 0.8 m); a confident plan cut 0.7 m inside used to get zero correction.
+    def bent(m, plan_inside):
+      for line, y0 in zip(m.laneLines, (0.0, -1.8, 1.8, 0.0), strict=True):
+        line.y = [y0 + 0.002 * x * x for x in XS]
+      m.position.y = [0.002 * x * x + plan_inside * (1 if x > 0 else 0) * min(x / 20, 1) for x in XS]
+      return m
+    full = LaneCenteringSettings(True, 0.0, 1.0)
+    inside = settled(LaneCenteringController(), observation(bent(model(), 0.7), settings=full)).correction
+    outside = settled(LaneCenteringController(), observation(bent(model(), -0.7), settings=full)).correction
+    no_e2e = settled(LaneCenteringController(), observation(bent(model(), 0.7))).correction
+    self.assertLess(inside, 0.0)  # steers left, back out of the bend
+    self.assertAlmostEqual(inside, no_e2e)
+    self.assertAlmostEqual(outside, 0.0)  # an outside-the-bend plan still has full model authority
+    deferred = settled(LaneCenteringController(), observation(bent(model(), 0.7), settings=replace(full, cut_authority=1.0))).correction
+    half = settled(LaneCenteringController(), observation(bent(model(), 0.7), settings=replace(full, cut_authority=0.5))).correction
+    self.assertAlmostEqual(deferred, 0.0)  # the cut authority is tunable on its own
+    self.assertTrue(inside < half < 0.0)
+
   def test_hard_gates_reset_and_reenable(self):
     for change in ("disabled", "override", "lane_change", "low_speed", "invalid_model", "long_only"):
       with self.subTest(change=change):

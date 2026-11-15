@@ -69,6 +69,9 @@ class HKGShapedTorquePolicy:
   def pid_error_context(self, error):
     return error
 
+  def friction_error_context(self, scaled_error, physical_error, speed):
+    return scaled_error
+
   def output_context(self, value, setpoint, jerk, measurement, speed):
     return self.output(value, setpoint, speed)
 
@@ -106,7 +109,8 @@ class HKGShapedTorquePolicy:
     self.previous_measurement = measurement
     lsf = (np.interp(cs.vEgo, LOW_SPEED_X, LOW_SPEED_Y) / max(cs.vEgo, MIN_SPEED)) ** 2
     kp = np.interp(cs.vEgo, parent.pid._k_p[0], parent.pid._k_p[1])
-    error = (setpoint - measurement) * (1 + lsf / max(kp, 1e-3))
+    physical_error = setpoint - measurement
+    error = physical_error * (1 + lsf / max(kp, 1e-3))
     gravity_adjusted = future - roll
     ff = gravity_adjusted - parent.torque_params.latAccelOffset * fade
     ff = self.feedforward_context(ff, setpoint, jerk, measurement, cs.vEgo)
@@ -115,7 +119,8 @@ class HKGShapedTorquePolicy:
     friction_jerk = math.copysign(max(abs(jerk) - jerk_deadzone, 0.0), jerk)
     ff, threshold = auto_stages.apply_stages(parent, cs, setpoint, jerk, ff, threshold,
       active=active, limited=safety_limited or curvature_limited, curvature_limited=curvature_limited)
-    selected_friction = friction_scale * parent.friction(error + JERK_GAIN * friction_jerk, deadzone, threshold, cs, setpoint)
+    friction_error = self.friction_error_context(error, physical_error, cs.vEgo)
+    selected_friction = friction_scale * parent.friction(friction_error + JERK_GAIN * friction_jerk, deadzone, threshold, cs, setpoint)
     ff += auto_stages.apply_selected_friction(parent, cs, setpoint, float(selected_friction),
       active=active, limited=safety_limited or curvature_limited, curvature_limited=curvature_limited)
     if cs.vEgo < self.low_speed_reset_threshold:

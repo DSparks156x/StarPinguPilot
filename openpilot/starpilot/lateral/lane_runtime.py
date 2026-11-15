@@ -35,9 +35,15 @@ def read_settings(params) -> LaneCenteringSettings:
       strength = STRENGTH_BASELINE
     if not math.isfinite(strength) or not 0.5 <= strength <= STRENGTH_MAX:
       raise ValueError('Invalid lane strength')
+    try:
+      cut_authority = float(raw('LaneCenteringCutAuthority', b'0.0'))
+    except UnknownKeyName:
+      cut_authority = 0.0
+    if not math.isfinite(cut_authority) or not 0 <= cut_authority <= 1:
+      raise ValueError('Invalid lane cut authority')
     if not math.isfinite(offset) or not -0.3 <= offset <= 0.3 or not math.isfinite(authority) or not 0 <= authority <= 1:
       raise ValueError('Invalid lane tuning')
-    return LaneCenteringSettings(enabled, offset, authority, pause, strength)
+    return LaneCenteringSettings(enabled, offset, authority, pause, strength, cut_authority)
   except (OSError, ValueError):
     return LaneCenteringSettings()
 

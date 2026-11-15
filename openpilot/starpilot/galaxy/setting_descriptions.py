@@ -28,6 +28,7 @@ DESCRIPTIONS = {
   'LaneCenteringPauseOnSignal': 'Pauses lane-centering correction while a turn signal is on.',
   'LaneCenterOffset': 'Moves the lane-centering target left or right of the detected lane center.',
   'LaneCenteringE2EAuthority': 'Lets a confident driving-model path reduce lane-centering correction when the model path differs from the lane center.',
+  'LaneCenteringCutAuthority': 'Lets a confident driving-model path reduce lane-centering correction while it cuts the inside of a curve. 0% always corrects back toward the lane center.',
   'LaneCenteringStrength': 'Sets the strength of lane-centering correction. 100% is normal; higher values strengthen it.',
   'PauseLateralSpeed': 'Pauses steering assistance below this speed. Zero disables the speed-based pause.',
   'PauseLateralOnSignal': 'Limits the low-speed steering pause to times when a turn signal is on.',

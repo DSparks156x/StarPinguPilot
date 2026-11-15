@@ -103,6 +103,7 @@ FLOAT_SPECS = {
   "ForceStopDistanceOffset": (-20, 20, 1, "ft"),
   "LaneCenterOffset": (-0.3, 0.3, 0.01, "m"),
   "LaneCenteringE2EAuthority": (0.0, 1.0, 0.05, "fraction"),
+  "LaneCenteringCutAuthority": (0.0, 1.0, 0.05, "fraction"),
   "LaneCenteringStrength": (0.5, STRENGTH_MAX, 0.015, "fraction"),
   **{f"{name}{suffix}": (0.5, 3.0, 0.05, "s")
      for name in ("Aggressive", "Standard", "Relaxed") for suffix in ("Follow", "FollowHigh")},
@@ -126,7 +127,7 @@ AOL_THRESHOLD = "AolBrakePauseSpeedMps"
 AOL_LEGACY_THRESHOLD = "PauseAOLOnBrake"
 TORQUE_NUMBERS = LEGACY_KEYS
 LANE_LIVE_KEYS = frozenset(("LaneCentering", "LaneCenteringPauseOnSignal", "LaneCenterOffset",
-                            "LaneCenteringE2EAuthority", "LaneCenteringStrength"))
+                            "LaneCenteringE2EAuthority", "LaneCenteringCutAuthority", "LaneCenteringStrength"))
 CURVE_KEYS = frozenset((CURVE_MASTER_KEY, CURVE_NO_LEAD_KEY))
 CURVE_PAGE_KEYS = CURVE_KEYS | {"ShowCSCStatus"}
 CRUISE_KEYS = frozenset(("CustomCruise", "CustomCruiseLong"))
@@ -1159,7 +1160,9 @@ class FeatureSettingsOwner:
                            self._value("LaneCenteringPauseOnSignal")[0] in ("0", "1")),
                    self._number_row("LaneCenterOffset", "Lane offset", allowed),
                    replace(self._number_row("LaneCenteringE2EAuthority", "Model path preference", allowed, scale=100, unit="%"),
-                           reason="Higher values let a confident model path reduce lane-centering correction when it differs from the lane center")))
+                           reason="Higher values let a confident model path reduce lane-centering correction when it differs from the lane center"),
+                   replace(self._number_row("LaneCenteringCutAuthority", "Model preference when cutting a curve", allowed, scale=100, unit="%"),
+                           reason="Higher values let a confident model path cut the inside of a curve; 0% always corrects back toward the lane center")))
       strength_row = self._number_row("LaneCenteringStrength", "Lane Centering Strength",
                                       allowed and strength_supported, scale=100 / STRENGTH_BASELINE, unit="%")
       rows.append(replace(strength_row,
@@ -1639,7 +1642,7 @@ class FeatureSettingsOwner:
           if not 33 <= number <= STRENGTH_MAX / STRENGTH_BASELINE * 100:
             return False
           number = max(low, number * STRENGTH_BASELINE / 100)
-        elif key == "LaneCenteringE2EAuthority":
+        elif key in ("LaneCenteringE2EAuthority", "LaneCenteringCutAuthority"):
           number /= 100
         if not valid or not math.isfinite(float(current)) or not low <= float(current) <= high or not math.isfinite(number) or not low <= number <= high:
           return False

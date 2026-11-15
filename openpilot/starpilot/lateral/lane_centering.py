@@ -57,6 +57,8 @@ class LaneCenteringSettings:
   e2e_authority: float = 0.5
   pause_on_signal: bool = True
   strength: float = STRENGTH_BASELINE
+  # StarPinguPilot: model-path authority while the path cuts the inside of the bend the lanes follow.
+  cut_authority: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -172,12 +174,27 @@ def _single_boundary_target(model: Any, paths, qualified, lookahead: float, offs
   return target
 
 
-def raw_correction(model: Any, speed_mps: float, offset_m: float, e2e_authority: float, *, _paths=None, _single_target=None) -> float | None:
+def _lane_bend(line_paths, qualified, lookahead: float) -> float | None:
+  """Lateral displacement of the qualified lane lines from their nearest point to the lookahead; >0 bends right."""
+  bends = []
+  for path, ok in zip(line_paths, qualified, strict=True):
+    if not ok or path is None:
+      continue
+    near, far = _at(path, path[0][0]), _at(path, lookahead)
+    if near is None or far is None:
+      continue
+    bends.append(far - near)
+  return sum(bends) / len(bends) if bends else None
+
+
+def raw_correction(model: Any, speed_mps: float, offset_m: float, e2e_authority: float, *, cut_authority: float = 0.0,
+                   _paths=None, _single_target=None) -> float | None:
   """Return a finite raw curvature correction, or None for unqualified model data."""
   speed = _finite_number(speed_mps)
   offset = _finite_number(offset_m)
   authority = _finite_number(e2e_authority)
-  if speed is None or offset is None or authority is None or speed < MIN_SPEED:
+  cut = _finite_number(cut_authority)
+  if speed is None or offset is None or authority is None or cut is None or speed < MIN_SPEED:
     return None
   try:
     lines = model.laneLines
@@ -241,10 +258,16 @@ def raw_correction(model: Any, speed_mps: float, offset_m: float, e2e_authority:
       std_path = None
     if std_path is not None:
       path_std = _at(std_path, lookahead)
+      # StarPinguPilot: a path cutting the inside of the bend the lanes follow gets its own authority (cut_authority).
+      # With one authority of 1.0 the break-in zeroed the correction exactly when the plan sat >0.5 m inside a curve
+      # (TT drives 00000019..25), so lane centering never resolved corner cutting. Lane splits, exits and
+      # straight-road or outside deviations keep e2e_authority.
+      bend = _lane_bend((left_path, right_path), qualified, lookahead)
+      cutting = bend is not None and abs(bend) >= E2E_BREAK_IN_START and (model_y - target_y) * bend > 0.0
       if path_std is not None and 0.0 <= path_std <= E2E_MAX_PATH_STD:
         break_in = clip_scalar((error_abs - E2E_BREAK_IN_START) /
                                  (E2E_BREAK_IN_FULL - E2E_BREAK_IN_START), 0.0, 1.0)
-        error *= 1.0 - clip_scalar(authority, 0.0, 1.0) * break_in
+        error *= 1.0 - clip_scalar(cut if cutting else authority, 0.0, 1.0) * break_in
     correction = 2.0 * error / lookahead ** 2
     return correction if math.isfinite(correction) else None
   except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
@@ -332,8 +355,9 @@ class LaneCenteringController:
     offset = _finite_number(settings.offset_m) if isinstance(settings, LaneCenteringSettings) else None
     authority = _finite_number(settings.e2e_authority) if isinstance(settings, LaneCenteringSettings) else None
     strength = _finite_number(settings.strength) if isinstance(settings, LaneCenteringSettings) else None
+    cut_authority = _finite_number(settings.cut_authority) if isinstance(settings, LaneCenteringSettings) else None
     if (base is None or speed is None or dt is None or dt <= 0 or
-        offset is None or authority is None or strength is None or not 0.5 <= strength <= STRENGTH_MAX or type(observation.model_sample_id) is not int or
+        offset is None or authority is None or cut_authority is None or strength is None or not 0.5 <= strength <= STRENGTH_MAX or type(observation.model_sample_id) is not int or
         observation.model_sample_id < 0 or not isinstance(observation.mode, ControlMode) or
         type(observation.model_valid) is not bool or type(observation.lateral_active) is not bool or
         type(observation.turn_signal_active) is not bool or type(observation.driver_override) is not bool or
@@ -379,7 +403,7 @@ class LaneCenteringController:
     else:
       self._geometry_cache = None
     tracked = self._tracker.target(observation.model, observation.model_sample_id, speed, dt, offset, revision=geometry)
-    raw = None if tracked.blocked else raw_correction(observation.model, speed, offset, authority,
+    raw = None if tracked.blocked else raw_correction(observation.model, speed, offset, authority, cut_authority=cut_authority,
                                                      _paths=paths, _single_target=tracked.y)
     if raw is None or not math.isfinite(raw):
       return self._fade(base, dt, "unqualified_model")
