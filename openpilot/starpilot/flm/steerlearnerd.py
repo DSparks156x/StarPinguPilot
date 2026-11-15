@@ -597,8 +597,10 @@ def run(
 
   sink = Sink()
   drain_state = PairedDrainState(control_socket, applied_socket)
+  from openpilot.starpilot.flm.learner_profile import loop as profile_loop
   try:
     while True:
+      profile_loop()
       state = (live_actor.ingress.optimizer.offer_state
                if live_actor is not None and live_actor.ingress is not None else None)
       pending_application = bool(state is not None and state['phase'] in ('trial', 'confirmed') and
@@ -1128,6 +1130,9 @@ def main():
     os.setpriority(os.PRIO_PROCESS, 0, 0)
     from openpilot.starpilot.flm.learner_cpu import configure_cpu
     configure_cpu()
+    # StarPinguPilot: report-only sampling profiler (where the engaged loop spends its time)
+    from openpilot.starpilot.flm.learner_profile import start as start_profile
+    start_profile()
   except OSError:
     # An optional estimator must not inherit realtime scheduling on failure.
     return
