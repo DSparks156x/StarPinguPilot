@@ -134,10 +134,11 @@ class HbaRunner:
   """Pulls the newest narrow-camera frame and runs the HBA classifier on it, with the newest wide-camera frame every
   WIDE_PERIOD_S in the dark (wide=False: never, e.g. DisableWideRoad)."""
 
-  def __init__(self, wide: bool = True):
+  def __init__(self, wide: bool = True, capture=None):
     self.client = None
     self.wide_client = None
     self.use_wide = wide
+    self.capture = capture  # capture.LightCapture (param HbaCapture) or None
     self.short = ShortExposureReader()
     self.clf = HbaClassifier()
     self.last_run = -math.inf
@@ -210,7 +211,13 @@ class HbaRunner:
                           speed_limit=ctx.speed_limit, wide=wide, wide_euler=wide_euler, short=short)
     self.last_run = ctx.now
     self.last_frame_id = int(frame_id)
-    return HbaResult(ctx.now, out, self.last_frame_id, (time.monotonic() - t0) * 1e3)
+    ms = (time.monotonic() - t0) * 1e3
+    if self.capture is not None:
+      try:
+        self.capture.maybe_save(ctx.now, int(frame_id), frame, short, out, ctx.dark)
+      except Exception:
+        cloudlog.exception("lightd: capture failed")
+    return HbaResult(ctx.now, out, self.last_frame_id, ms)
 
 
 class HbaWorker:
@@ -372,7 +379,11 @@ def main():
   cv2.setNumThreads(1)
   os.nice(10)  # Dom's manager has no per-process nice
   params = Params()
-  lightd = LightD(False, get_gps_location_service(params), SolarTracker(params))
+  capture = None
+  if params.get_bool("HbaCapture"):
+    from openpilot.starpilot.system.lightd.capture import LightCapture
+    capture = LightCapture(route_fn=lambda: params.get("CurrentRoute") or "")
+  lightd = LightD(False, get_gps_location_service(params), SolarTracker(params), HbaWorker(HbaRunner(capture=capture)))
   sm = lightd.submaster()
   pm = messaging.PubMaster(["starpilotLightState"])
   mode, mode_checked = lightd_mode(params), time.monotonic()

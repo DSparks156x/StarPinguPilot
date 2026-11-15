@@ -1274,3 +1274,50 @@ The extra glare (`rundiff.py`): 22 seg 15 0.3 s, a 2-4 px white dot far across a
 an approaching car by score.py, not confirmable on video, our beam off at the time; 46 seg 15 0.1 s, a taillight (the
 rule never applies to red), timing noise. The weights are fitted on these four drives, so the next drives are the real
 test; the short-exposure capture (`tools/short_exposure_capture.py`) runs on the device to add those frames.
+
+## 20. Drive `00000025` (2026-11-15): lamps glare, signs are sharp; the short exposure from the first frame
+
+Drive 25 ran the look veto (section 19). Segments 3-8 and 20-26 were town by streetlight density (suburban roads with
+signals and houses; held low by design). The rural stretch (9-19) still dipped for yellow chevrons, guardrail
+reflectors and plates: a new light reaches evidence 1 in 2-4 frames, the veto needs 3 measured frames to vote. Three
+dips were real cars (14:25.8 a car first seen at 46 m, dipped in 0.4 s, the camera's limit; 14:50.9; 15:40.7).
+
+**The short exposure, logged per light (`hba_tools/shortdip_all.py`):** every car seen on video clipped the short frame
+at 959 from its first or second frame; lit chevrons and plates peaked at 86-260, sharp far dots at 11-92, the brightest
+white non-car 576. `short_lamp` took the median of 3 short frames, so both cars got their lamp flag 2 frames late.
+Now one frame at or over `short_lamp_clip` (900) is a lamp.
+
+**15:40.7, 0.2 s of high beam at a car:** the restore delay ran out on the frame a car came round a bend; its track
+was one frame old with no evidence, so the corridor counted as clear. Now a non-static light that is a measured lamp
+or glares (`Track.glaring`: median look of its last 3 measured frames >= 0.5) keeps the beam from coming back on
+(`REASON_DELAY`), evidence or not. In the replay (no short exposure) the same car was then called `static/beam` (it
+appeared as our beam switched on); a glaring light is no longer taken for a sign our switch-on lit.
+
+**Lamps glare at any range, signs are sharp until near and big** (the user's observation, measured): the drive 22 car
+that read 14-26 in the short exposure for 4 s (LED flicker) glared at look 0.5-0.97 on every frame; the signs beside it
+0.01-0.14. Per frame on the labelled tracks (in-sample) look < 0.15 is 3-9 % of car frames, ~55 % of sign and ~100 %
+of reflector frames. So a white light that is sharp on this frame (`Track.sharp`, `look_sharp_score` 0.15) builds no
+evidence on it (holds what it had), unless it is a measured lamp or measured moving at us. A car's odd sharp frame
+costs one frame.
+
+**Full replays** (score.py, replay permit; before = section 19's `v*`, `g25` for 25; after = `runs/w*`):
+
+| drive | nuisance s | glare s | toggles / min | on % |
+|---|---|---|---|---|
+| 25 | 133.7 -> 123.5 | 2.2 -> 1.8 | 1.22 -> 1.16 | 35.2 -> 36.2 |
+| 22 | 218.8 -> 190.2 | 4.8 -> 4.8 | 1.45 -> 1.27 | 39.3 -> 41.5 |
+| 6f | 182.8 -> 156.3 | 1.6 -> 1.7 | 1.81 -> 1.55 | 49.8 -> 52.7 |
+| 5a | 180.4 -> 148.4 | 1.7 -> 3.0 | 1.73 -> 1.47 | 41.3 -> 44.1 |
+| 46 | 122.2 -> 115.3 | 1.7 -> 1.7 | 1.54 -> 1.48 | 32.1 -> 32.8 |
+
+The 5a extra glare (`rundiff.py`): 1.1 s in seg 30 on two taillights the rules already call static (`vote`,
+`roadside`; red, untouched by this change) that the beam now meets because the sign dips before them are gone, and
+0.1 s twice of timing. Replays have no short exposure, so the clip rule and the lamp half of the restore block only
+act on the device. Shape (square / diamond outlines of near signs) is not used yet.
+
+**Capture for tuning (param `HbaCapture`, `capture.py`):** the hand-started `tools/short_exposure_capture.py` died with
+every reboot and saved frames no light list pointed at. lightd now saves, in the dark, every 0.5 s on frames with
+tracked lights, the processed Y/UV crop and the raw short-exposure crop around each of up to 12 lights with their track
+id, kind, evidence, look, short peak and lamp flag, plus the whole Y frame every 10 s, to
+`/data/media/0/hbacap/<route>/<hbaFrameId>.npz` (lines up with the rlog's light lists), on a writer thread that drops
+rather than waits, oldest files pruned past 3 GB. `tools/hbacap_view.py` makes long/short contact sheets and a csv.

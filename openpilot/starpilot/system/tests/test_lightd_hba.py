@@ -828,3 +828,56 @@ def test_a_track_that_looks_like_a_plate_is_a_static_sign():
   run(clf, frames)
   live = [tr for tr in clf.tracks if not tr.missed]
   assert live and all(tr.kind == KIND_STATIC and tr.why == "look" for tr in live)
+
+
+def _view(**kw):
+  from openpilot.starpilot.system.lightd.hba import KIND_CANDIDATE, TrackView
+  base = {"tid": 1, "u": 640.0, "v": 380.0, "kind": KIND_CANDIDATE, "why": "colour", "strong": False, "threat": True,
+          "near": True, "paired": False, "reflector": False, "area": 6.0}
+  base.update(kw)
+  return TrackView(**base)
+
+
+def _policy_run(policy, views, n, t0, hb=True):
+  from openpilot.starpilot.system.lightd.hba import HbaOut
+  return [policy.step(t0 + i * 0.1, HbaOut(), views, False, False, FAST, True, hb) for i in range(n)]
+
+
+def test_a_sharp_light_builds_no_evidence_and_a_glowing_one_does():
+  from openpilot.starpilot.system.lightd.hba import HbaPolicy
+  for sharp, dips in ((True, False), (False, True)):
+    pol = HbaPolicy(HbaParams())
+    _policy_run(pol, [], 80, 0.0)
+    outs = _policy_run(pol, [_view(sharp=sharp)], 30, 8.0)
+    assert any(not o.high_beam_permitted for o in outs) == dips
+  # a measured lamp or a light moving at us dips even on a sharp frame
+  for kw in ({"lamp": True}, {"kind": "oncoming", "why": "motion"}):
+    pol = HbaPolicy(HbaParams())
+    _policy_run(pol, [], 80, 0.0)
+    assert not _policy_run(pol, [_view(sharp=True, **kw)], 5, 8.0)[-1].high_beam_permitted
+
+
+def test_a_glaring_light_keeps_the_beam_from_coming_back_on():
+  from openpilot.starpilot.system.lightd.hba import HbaPolicy
+  pol = HbaPolicy(HbaParams())
+  _policy_run(pol, [], 80, 0.0)
+  outs = _policy_run(pol, [_view()], 10, 8.0)  # a car dips the beam
+  assert not outs[-1].high_beam_permitted
+  # the corridor clears of threats, but a light that glares and hasn't built evidence yet (it just came into view, far
+  # and lone: no rule calls it a threat) is in view: no switch-on, however long
+  far = _view(tid=2, near=False, threat=False, sharp=False, glaring=True)
+  outs = _policy_run(pol, [far], 100, 9.0)
+  assert not any(o.high_beam_permitted for o in outs) and outs[-1].reason & REASON_DELAY
+  # once it's gone the usual clear time runs
+  outs = _policy_run(pol, [], 100, 19.0)
+  assert outs[-1].high_beam_permitted
+
+
+def test_one_clipped_short_frame_is_a_lamp():
+  from openpilot.starpilot.system.lightd.hba import Obs, Track
+  p = HbaParams()
+  def obs(sp):
+    return Obs(0.0, 640.0, 380.0, 100.0, -3.0, 10, False, 255, 0.0, False, False, 100.0, 0, False, short_peak=sp)
+  tr = Track(0, [obs(math.nan), obs(959.0)])
+  assert tr.short_lamp(p)
+  assert not Track(0, [obs(math.nan), obs(500.0)]).short_lamp(p)

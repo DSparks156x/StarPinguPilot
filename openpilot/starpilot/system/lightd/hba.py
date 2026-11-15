@@ -290,6 +290,19 @@ class HbaParams:
   # 0.9-1.3 s later); 0.1 took 47 % and missed one far pair turning away.
   look_sign_score: float = 0.05
   look_min_obs: int = 3
+  # lamps glare at any range, lit signs and reflectors are sharp until they're near and big (DESIGN.md section 20):
+  # a white light that is sharp on this frame builds no evidence (it holds what it had), unless it's a measured lamp
+  # or moves at us. Per frame on the labelled tracks, 0.15 reads 3-9 % of car frames sharp (no two in a row, mostly)
+  # and 55 % of sign, ~100 % of reflector frames; a car that read dim in the short exposure for seconds (LED flicker,
+  # drive 22) still glared at 0.5-0.97 on every frame.
+  look_sharp_score: float = 0.15
+  # a light that glares (median look of its last 3 measured frames at or above this) or is a measured lamp keeps the
+  # beam from coming back on, before it has built any evidence (drive 25 seg 15: the restore delay ran out on the
+  # frame a car came round a bend, 0.2 s of high beam at it), and isn't a sign our switch-on lit
+  look_glare_score: float = 0.5
+  # one short frame clipped (or nearly) is a source: no lit surface gets there (drive 25: every car clipped at 959 from
+  # its first frame, lit chevrons and plates peaked at 99-260, the brightest white non-car 576)
+  short_lamp_clip: float = 900.0
   ev_lamp: float = 6.0              # a measured lamp builds evidence at least this fast (two frames), with or without
                                     # our high beam: the slow far rates exist because a sign can look the same, not this
 
@@ -381,8 +394,13 @@ class Track:
 
   def short_lamp(self, p):
     """The short exposure says it's a source: brighter than any sign our beams can light."""
+    if self.red_frac > 0.5:
+      return False
+    o = self.hist[-1]
+    if not o.red and math.isfinite(o.short_peak) and o.short_peak >= p.short_lamp_clip:
+      return True
     recent = self._short_recent(p)
-    return bool(recent) and self.red_frac <= 0.5 and median(np.array([h.short_peak for h in recent])) >= p.short_lamp_peak
+    return bool(recent) and median(np.array([h.short_peak for h in recent])) >= p.short_lamp_peak
 
   def short_sign(self, p):
     """The short exposure says it's a lit surface: a big burnt-out core that is dim on every short frame."""
@@ -394,6 +412,16 @@ class Track:
     """It looks like a lit sign or reflector, not a lamp: crisp, no glow spreading around it, no lamp partner."""
     recent = [h.look for h in self.hist[-5:] if not h.red and math.isfinite(h.look)]
     return len(recent) >= p.look_min_obs and self.red_frac <= 0.5 and median(np.array(recent)) < p.look_sign_score
+
+  def sharp(self, p):
+    """This frame it's a white light with no glow spreading around it: a lit sign or reflector, or a car's odd frame."""
+    o = self.hist[-1]
+    return not o.red and self.red_frac <= 0.5 and math.isfinite(o.look) and o.look < p.look_sharp_score
+
+  def glaring(self, p):
+    """It glares like a lamp: median look of its last 3 measured white frames at or above look_glare_score."""
+    recent = [h.look for h in self.hist[-3:] if not h.red and math.isfinite(h.look)]
+    return bool(recent) and self.red_frac <= 0.5 and median(np.array(recent)) >= p.look_glare_score
 
   def is_threat(self, p):
     if self.kind == KIND_STATIC:
@@ -410,7 +438,8 @@ class Track:
     o = self.hist[-1]
     far = not np.isfinite(self.dist) or self.dist > p.motion_max_dist
     return TrackView(self.tid, o.u, o.v, self.kind, self.why, self.strong(p), self.is_threat(p), not far,
-                     self.paired_recent(p), self.reflector, o.area, self.partner_recent(p), self.short_lamp(p))
+                     self.paired_recent(p), self.reflector, o.area, self.partner_recent(p), self.short_lamp(p),
+                     self.sharp(p), self.glaring(p))
 
 
 class TrackView(NamedTuple):
@@ -429,6 +458,8 @@ class TrackView(NamedTuple):
   area: float = 0.0
   partner: bool = False  # paired by a second blob on its row (not by being one wide blob) on pair_min frames
   lamp: bool = False     # Track.short_lamp: the short exposure measured a source
+  sharp: bool = False    # Track.sharp: no glow around it this frame
+  glaring: bool = False  # Track.glaring: glows like a lamp
 
 
 class HbaLight(NamedTuple):
@@ -442,6 +473,7 @@ class HbaLight(NamedTuple):
   evidence: float
   kind: str     # "kind/why"
   lamp: bool
+  look: float = math.nan  # look_score this frame (not logged: the capture keeps it)
 
 
 @dataclass
@@ -1173,7 +1205,11 @@ class HbaPolicy:
     if tv.kind == KIND_STATIC:
       return p.ev_static
     r = self._rules_rate(tv, high_beam_on)
-    return max(r, p.ev_lamp) if tv.lamp else r
+    if tv.lamp:
+      return max(r, p.ev_lamp)
+    if tv.sharp and not (tv.kind == KIND_ONCOMING and tv.why == "motion"):
+      return 0.0  # sharp this frame: what a sign looks like, so this frame says nothing for a car; hold, don't build
+    return r
 
   def _rules_rate(self, tv: TrackView, high_beam_on):
     p = self.p
@@ -1287,7 +1323,12 @@ class HbaPolicy:
       self.causes["other"] = t
     if wide_threat:
       self.causes["wide"] = t
-    if not (dip or gated) and not out.threat:
+    # a lamp in view that hasn't built evidence yet (it just appeared) isn't a clear road: don't switch on at it
+    waiting = not self.permitted and p.evidence and any(tv.kind != KIND_STATIC and (tv.lamp or tv.glaring) for tv in views)
+    if waiting:
+      self.clear_since = None
+      reason |= REASON_DELAY
+    if not (dip or gated) and not out.threat and not waiting:
       if self.clear_since is None:
         self.clear_since = t
       out.clear_for_s = t - self.clear_since
@@ -1439,7 +1480,8 @@ class HbaClassifier:
     if tr.reflector:
       # it lit up with our beam: a sign, until it shows what a sign can't, a lamp pair or oncoming motion
       tr.obj_speed = self._motion_fit(tr, v_ego)
-      if sum(h.partner for h in tr.hist[-5:]) >= 3 or (np.isfinite(tr.obj_speed) and tr.obj_speed > p.oncoming_speed):
+      if (sum(h.partner for h in tr.hist[-5:]) >= 3 or (np.isfinite(tr.obj_speed) and tr.obj_speed > p.oncoming_speed)
+          or tr.glaring(p)):  # a lamp that came into view as we switched on glares; the sign we lit doesn't
         tr.reflector = False
       else:
         tr.obj_speed = float("nan")
@@ -1595,7 +1637,8 @@ class HbaClassifier:
     self.policy.step(t, out, views, model_lead, wide_threat, v_ego, dark, bool(self._beam))
     ev = self.policy.ev
     out.lights = [HbaLight(tr.tid, tv.u, tv.v, int(tv.area), bool(tr.hist[-1].red), tr.hist[-1].short_peak,
-                           ev[tv.tid][0] if tv.tid in ev else float(tv.threat), f"{tv.kind}/{tv.why}", tv.lamp)
+                           ev[tv.tid][0] if tv.tid in ev else float(tv.threat), f"{tv.kind}/{tv.why}", tv.lamp,
+                           tr.hist[-1].look)
                   for tr, tv in zip(live, views, strict=True)]
     return out
 
