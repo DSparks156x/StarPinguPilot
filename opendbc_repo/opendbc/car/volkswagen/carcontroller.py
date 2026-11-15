@@ -45,6 +45,7 @@ class CarController(CarControllerBase):
       self.meb_long_state = mebcan.MebLongStateMachine(self.CP, self.CCP)
 
     self.hca_status = hca_tuning.hca_status(hca_tuning.DEFAULT_HCA_MODE)
+    self.hca_zero_active = False
     if CP.flags & VolkswagenFlags.PQ:
       self.CCS = pqcan
       # StarPinguPilot: never exceed the HCA rates the panda latched at startup
@@ -126,7 +127,8 @@ class CarController(CarControllerBase):
           apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.CCP)
 
         apply_torque = self.hca_mitigation.update(apply_torque, self.apply_torque_last)
-        hca_enabled = apply_torque != 0
+        # StarPinguPilot: optionally keep PQ HCA active through exact zero torque while steering
+        hca_enabled = apply_torque != 0 or bool(self.CP.flags & VolkswagenFlags.PQ and self.hca_zero_active and CC.latActive)
         self.apply_torque_last = apply_torque
         if self.CP.flags & VolkswagenFlags.PQ:
           can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_torque, hca_enabled, self.hca_status))
@@ -245,9 +247,10 @@ class CarController(CarControllerBase):
       _projection.finish(new_actuators.torque)
     return new_actuators, can_sends
 
-  def update_pq_hca_tuning(self, mode_idx, up_idx, down_idx):
+  def update_pq_hca_tuning(self, mode_idx, up_idx, down_idx, zero_idx=hca_tuning.DEFAULT_HCA_ZERO_TORQUE):
     # StarPinguPilot: pick up HCA mode/rate changes while not steering
     self.hca_status = hca_tuning.hca_status(mode_idx)
+    self.hca_zero_active = hca_tuning.zero_torque_active(zero_idx)
     up, down = hca_tuning.delta_rates(up_idx, down_idx)
     self.CCP.STEER_DELTA_UP = min(up, self.pq_max_delta_rates[0])
     self.CCP.STEER_DELTA_DOWN = min(down, self.pq_max_delta_rates[1])

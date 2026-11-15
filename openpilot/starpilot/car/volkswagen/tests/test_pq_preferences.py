@@ -60,19 +60,19 @@ class TestPqPreferences(unittest.TestCase):
     self.raw("VolkswagenLightdMode", b"3")
     self.assertEqual(PqStartup.read(self.params), PqStartup())
     self.assertEqual(lightd_mode(self.params), fla.LIGHTD_OFF)
-    self.assertEqual(HcaPreference(self.params).read(), (hca_tuning.DEFAULT_HCA_MODE, 0, 0))
+    self.assertEqual(HcaPreference(self.params).read(), (hca_tuning.DEFAULT_HCA_MODE, 0, 0, 0))
 
   def test_live_selection_reread_and_capped(self):
     self.raw("SafeMode", b"0")
     self.raw("VolkswagenHCAMode", b"0")
     preference = HcaPreference(self.params)
-    self.assertEqual(preference.read(), (0, 0, 0))
+    self.assertEqual(preference.read(), (0, 0, 0, 0))
     self.raw("VolkswagenHCAMode", b"1")
     self.raw("VolkswagenHCADeltaRateUp", b"4")
-    self.assertEqual(preference.read(), (0, 0, 0))  # re-read once a second
+    self.assertEqual(preference.read(), (0, 0, 0, 0))  # re-read once a second
     for _ in range(99):
       preference.read()
-    self.assertEqual(preference.read(), (1, 4, 0))
+    self.assertEqual(preference.read(), (1, 4, 0, 0))
 
     cp = CarInterface.get_non_essential_params(CAR.AUDI_TT_MK2)
     cp.safetyConfigs[-1].safetyParam |= hca_tuning.encode_pq_safety_param(1, 1)
@@ -80,6 +80,19 @@ class TestPqPreferences(unittest.TestCase):
     CC.update_pq_hca_tuning(*preference.read())
     self.assertEqual(CC.hca_status, 7)
     self.assertEqual((CC.CCP.STEER_DELTA_UP, CC.CCP.STEER_DELTA_DOWN), (30, 10))  # up capped at the latched 30
+    self.assertFalse(CC.hca_zero_active)
+    CC.update_pq_hca_tuning(1, 0, 0, 1)
+    self.assertTrue(CC.hca_zero_active)
+
+  def test_zero_torque_hca_status(self):
+    from opendbc.can import CANPacker
+    from opendbc.car import Bus
+    from opendbc.car.volkswagen import pqcan
+    cp = CarInterface.get_non_essential_params(CAR.AUDI_TT_MK2)
+    packer = CANPacker(DBC[cp.carFingerprint][Bus.pt])
+    for enabled, status in ((False, 3), (True, 7)):
+      _, data, _ = pqcan.create_steering_control(packer, 0, 0, enabled, 7)
+      self.assertEqual((data[1] >> 4) & 0xF, status)
 
   def test_garbage_values_fall_back(self):
     self.raw("SafeMode", b"0")

@@ -10,10 +10,11 @@ from opendbc.car.volkswagen import fla, hca_tuning
 from opendbc.car.volkswagen.values import VolkswagenFlags
 from openpilot.starpilot.saved_source import read_saved
 
-HCA_KEYS = ("VolkswagenHCAMode", "VolkswagenHCADeltaRateUp", "VolkswagenHCADeltaRateDown")
+HCA_KEYS = ("VolkswagenHCAMode", "VolkswagenHCADeltaRateUp", "VolkswagenHCADeltaRateDown", "VolkswagenHCAZeroTorque")
 LIGHTD_KEY = "VolkswagenLightdMode"
 DEFAULTS = {"VolkswagenHCAMode": hca_tuning.DEFAULT_HCA_MODE, "VolkswagenHCADeltaRateUp": 0,
-            "VolkswagenHCADeltaRateDown": 0, LIGHTD_KEY: fla.LIGHTD_OFF}
+            "VolkswagenHCADeltaRateDown": 0, "VolkswagenHCAZeroTorque": hca_tuning.DEFAULT_HCA_ZERO_TORQUE,
+            LIGHTD_KEY: fla.LIGHTD_OFF}
 READ_PERIOD_FRAMES = 100  # 1 s at the 100 Hz controller rate
 
 
@@ -72,12 +73,12 @@ class HcaPreference:
     self.frames = 0
     self.value = self._read()
 
-  def _read(self) -> tuple[int, int, int]:
+  def _read(self) -> tuple[int, int, int, int]:
     if _safe_mode(self.params):
-      return DEFAULTS["VolkswagenHCAMode"], 0, 0
+      return DEFAULTS["VolkswagenHCAMode"], 0, 0, hca_tuning.DEFAULT_HCA_ZERO_TORQUE
     return tuple(_read_int(self.params, key) for key in HCA_KEYS)
 
-  def read(self) -> tuple[int, int, int]:
+  def read(self) -> tuple[int, int, int, int]:
     if self.frames % READ_PERIOD_FRAMES == 0:
       self.value = self._read()
     self.frames += 1

@@ -89,6 +89,7 @@ DESCRIPTIONS = {
   'VolkswagenHCAMode': 'Chooses the HCA status sent to the power steering while StarPilot steers.',
   'VolkswagenHCADeltaRateUp': 'Sets how quickly steering torque may rise, in HCA counts per frame.',
   'VolkswagenHCADeltaRateDown': 'Sets how quickly steering torque may fall, in HCA counts per frame.',
+  'VolkswagenHCAZeroTorque': 'Keeps HCA active at exactly zero steering torque instead of handing the rack back to its own centering.',
   'VolkswagenLightdMode': 'Chooses camera-controlled headlights: off, shadow logging only, automatic low beam, or low beam with high beam assist.',
   'TeslaAOLScreenTap': 'Lets a three-finger tap on a supported Tesla screen toggle Always On Lateral.',
   'TeslaAOLDisengageOnBrake': 'Disarms screen-tap Always On Lateral when you press the brake.',

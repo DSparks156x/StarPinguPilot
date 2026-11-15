@@ -10,11 +10,13 @@ from openpilot.starpilot.ui.feature_settings_state import FeatureRow
 SETTINGS = {**HCA_SETTINGS, **LIGHTD_SETTINGS}
 KEYS = frozenset(SETTINGS)
 DEFAULTS = {"VolkswagenHCAMode": DEFAULT_HCA_MODE, "VolkswagenHCADeltaRateUp": 0, "VolkswagenHCADeltaRateDown": 0,
-            "VolkswagenLightdMode": 0}
+            "VolkswagenHCAZeroTorque": 0, "VolkswagenLightdMode": 0}
 REASONS = {
   "VolkswagenHCAMode": "HCA status sent while steering. Applies on the next engagement.",
   "VolkswagenHCADeltaRateUp": "Steering torque rise limit, enforced by the panda. A higher rate applies at the next car start.",
   "VolkswagenHCADeltaRateDown": "Steering torque fall limit, enforced by the panda. A higher rate applies at the next car start.",
+  "VolkswagenHCAZeroTorque": "Keep HCA active when the steering torque is exactly zero, instead of dropping to HCA 3 "
+                             "(EPS self-centering). Applies on the next engagement.",
   "VolkswagenLightdMode": "Camera-controlled low beam and high beam assist. Needs the patched J519. Applies at the next car start.",
 }
 

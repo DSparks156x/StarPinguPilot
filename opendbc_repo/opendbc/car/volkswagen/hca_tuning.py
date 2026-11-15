@@ -8,6 +8,12 @@
 HCA_MODES = (5, 7)
 DEFAULT_HCA_MODE = 1
 
+# VolkswagenHCAZeroTorque param index -> keep HCA_Status active while steering with exactly zero torque.
+# 0 (stock): drop to HCA 3 at zero, so the EPS returns to its own centering for that frame.
+# 1: keep the selected active status, so zero torque means zero assist, not a mode change.
+HCA_ZERO_TORQUE = ("Inactive (HCA 3)", "Keep active")
+DEFAULT_HCA_ZERO_TORQUE = 0
+
 # VolkswagenHCADeltaRateUp/Down param index -> HCA counts per 50Hz frame
 # Must match VOLKSWAGEN_PQ_HCA_DELTA_RATES in opendbc/safety/modes/volkswagen_pq.h
 HCA_DELTA_RATES = (10, 30, 50, 150, 300)
@@ -17,6 +23,7 @@ HCA_SETTINGS = {
   "VolkswagenHCAMode": ("HCA Mode", tuple(f"HCA {status}" for status in HCA_MODES)),
   "VolkswagenHCADeltaRateUp": ("HCA Rate Up", tuple(str(rate) for rate in HCA_DELTA_RATES)),
   "VolkswagenHCADeltaRateDown": ("HCA Rate Down", tuple(str(rate) for rate in HCA_DELTA_RATES)),
+  "VolkswagenHCAZeroTorque": ("HCA At Zero Torque", HCA_ZERO_TORQUE),
 }
 
 PQ_RATE_UP_SHIFT = 3
@@ -38,6 +45,10 @@ def hca_status(mode_idx) -> int:
   except (TypeError, ValueError):
     mode_idx = DEFAULT_HCA_MODE
   return HCA_MODES[mode_idx] if 0 <= mode_idx < len(HCA_MODES) else HCA_MODES[DEFAULT_HCA_MODE]
+
+
+def zero_torque_active(zero_idx) -> bool:
+  return _clip_index(zero_idx, HCA_ZERO_TORQUE) == 1
 
 
 def delta_rates(up_idx, down_idx) -> tuple[int, int]:

@@ -125,6 +125,7 @@
   "VolkswagenHCADeltaRateDown",
   "VolkswagenHCADeltaRateUp",
   "VolkswagenHCAMode",
+  "VolkswagenHCAZeroTorque",
   "VolkswagenLightdMode",
   "VoltOnePedalMode",
   "VoltSNG",

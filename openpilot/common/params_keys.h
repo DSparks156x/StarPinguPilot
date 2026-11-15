@@ -400,6 +400,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"VolkswagenHCADeltaRateDown", {PERSISTENT, INT, "0"}},
     {"VolkswagenHCADeltaRateUp", {PERSISTENT, INT, "0"}},
     {"VolkswagenHCAMode", {PERSISTENT, INT, "1"}},
+    {"VolkswagenHCAZeroTorque", {PERSISTENT, INT, "0"}},
     {"VolkswagenLightdMode", {PERSISTENT, INT, "0"}},
     {"PingulinkEnable", {PERSISTENT, BOOL, "0"}},
     {"PingulinkUrl", {PERSISTENT, STRING}},
