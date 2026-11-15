@@ -1489,7 +1489,7 @@ struct LearningControlEvidence {
   struct StageValue;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(f2447170bb68f358, 14, 21)
+    CAPNP_DECLARE_STRUCT_HEADER(f2447170bb68f358, 14, 22)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -11179,6 +11179,9 @@ public:
   inline bool hasLiveAppliedCoordinates() const;
   inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Reader getLiveAppliedCoordinates() const;
 
+  inline bool hasPackedNamedValues() const;
+  inline  ::capnp::Data::Reader getPackedNamedValues() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -11440,6 +11443,13 @@ public:
   inline  ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>::Builder initLiveAppliedCoordinates(unsigned int size);
   inline void adoptLiveAppliedCoordinates(::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>&& value);
   inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> disownLiveAppliedCoordinates();
+
+  inline bool hasPackedNamedValues();
+  inline  ::capnp::Data::Builder getPackedNamedValues();
+  inline void setPackedNamedValues( ::capnp::Data::Reader value);
+  inline  ::capnp::Data::Builder initPackedNamedValues(unsigned int size);
+  inline void adoptPackedNamedValues(::capnp::Orphan< ::capnp::Data>&& value);
+  inline ::capnp::Orphan< ::capnp::Data> disownPackedNamedValues();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -30979,6 +30989,40 @@ inline void LearningControlEvidence::Builder::adoptLiveAppliedCoordinates(
 inline ::capnp::Orphan< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>> LearningControlEvidence::Builder::disownLiveAppliedCoordinates() {
   return ::capnp::_::PointerHelpers< ::capnp::List<double,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
       ::capnp::bounded<20>() * ::capnp::POINTERS));
+}
+
+inline bool LearningControlEvidence::Reader::hasPackedNamedValues() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS).isNull();
+}
+inline bool LearningControlEvidence::Builder::hasPackedNamedValues() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::Data::Reader LearningControlEvidence::Reader::getPackedNamedValues() const {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(_reader.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS));
+}
+inline  ::capnp::Data::Builder LearningControlEvidence::Builder::getPackedNamedValues() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::get(_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS));
+}
+inline void LearningControlEvidence::Builder::setPackedNamedValues( ::capnp::Data::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::set(_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::Data::Builder LearningControlEvidence::Builder::initPackedNamedValues(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::init(_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS), size);
+}
+inline void LearningControlEvidence::Builder::adoptPackedNamedValues(
+    ::capnp::Orphan< ::capnp::Data>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::Data>::adopt(_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::Data> LearningControlEvidence::Builder::disownPackedNamedValues() {
+  return ::capnp::_::PointerHelpers< ::capnp::Data>::disown(_builder.getPointerField(
+      ::capnp::bounded<21>() * ::capnp::POINTERS));
 }
 
 inline  ::uint16_t LearningControlEvidence::FullEffectTrace::Reader::getVersion() const {
